@@ -1,3 +1,287 @@
+@SCRIPT cigarette_management {
+  @Metadata {
+    version: "1.1.0"
+    description: "Comprehensive cigarette inventory and order management for AMPM with extended UPC barcode support"
+    compliance: ["PCI-DSS", "GDPR", "HIPAA", "SOC2", "ISO-8583"]
+    created_at: "2025-07-31T04:57:00-07:00"
+    target_retailers: ["AMPM", "Coremark"]
+  }
+  @CONFIG {
+    upc_sources: [
+      "https://upcdatabase.org/api/v1",
+      "https://www.barcodelookup.com/api",
+      "https://www.upcitemdb.com/api",
+      "https://api.upcdatabase.org/v2",
+      "https://coremark.api/upc"
+    ]
+    barcode_standards: ["UPC-A", "EAN-13"]
+    tax_config: {
+      federal_tax: 1.03,
+      state_taxes: {
+        "AMPM": 2.50,
+        "Coremark": 2.50
+      }
+    }
+    database: {
+      type: "PostgreSQL",
+      schema: "cigarette_inventory",
+      encryption: "AES-256"
+    }
+    caching: {
+      type: "Redis",
+      ttl: "12h",
+      snapshot_interval: "600s"
+    }
+    logging: {
+      type: "Kafka",
+      topics: ["cigarette_ingestion", "cigarette_inventory_updates", "cigarette_order_processing"]
+    }
+    blockchain: {
+      platform: "Ethereum",
+      endpoint: "https://mainnet.infura.io/v3/${INFURA_KEY}",
+      smart_contract: "CigaretteOrderVerification"
+    }
+    pos_scanners: ["Zebra DS2208", "Honeywell Xenon 1900", "Datalogic QuickScan QD2430"]
+  }
+  @INIT {
+    @CONNECT upc_sources { auth: "api_key", retry: 3 }
+    @CONNECT postgresql { url: "postgresql://cluster.pos_quantum_synergy_chat:5432/cigarette_db" }
+    @CONNECT redis { url: "redis://cluster.pos_quantum_synergy_chat:6379" }
+    @CONNECT kafka { url: "kafka://cluster.pos_quantum_synergy_chat:9092" }
+    @CONNECT blockchain { url: config.blockchain.endpoint }
+    @CREATE table IN postgresql {
+      query: "
+        CREATE TABLE IF NOT EXISTS cigarette_inventory (
+          item_id SERIAL PRIMARY KEY,
+          upc_code VARCHAR(13) NOT NULL,
+          brand VARCHAR(50) NOT NULL,
+          variant VARCHAR(50) NOT NULL,
+          retailer VARCHAR(50) NOT NULL,
+          price DECIMAL(10,2) NOT NULL,
+          stock_qty INT NOT NULL,
+          tax_rate DECIMAL(5,2) NOT NULL,
+          last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          metadata JSONB,
+          UNIQUE(upc_code, retailer)
+        );
+        CREATE TABLE IF NOT EXISTS cigarette_orders (
+          order_id SERIAL PRIMARY KEY,
+          retailer VARCHAR(50) NOT NULL,
+          upc_code VARCHAR(13) NOT NULL,
+          quantity INT NOT NULL,
+          order_status VARCHAR(20) NOT NULL,
+          order_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          delivery_timestamp TIMESTAMP,
+          metadata JSONB
+        );
+        CREATE TABLE IF NOT EXISTS general_inventory (
+          item_id SERIAL PRIMARY KEY,
+          upc_code VARCHAR(13) NOT NULL,
+          category VARCHAR(50) NOT NULL,
+          description TEXT NOT NULL,
+          price DECIMAL(10,2) NOT NULL,
+          stock_qty INT NOT NULL,
+          last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          metadata JSONB
+        );
+      "
+    }
+    @DEPLOY smart_contract {
+      type: "CigaretteOrderVerification",
+      blockchain: config.blockchain.platform,
+      code: "
+        pragma solidity ^0.8.0;
+        contract CigaretteOrderVerification {
+          address public owner;
+          mapping(string => uint256) public stockLevels;
+          mapping(string => uint256) public prices;
+          mapping(string => uint256) public taxRates;
+          constructor() {
+            owner = msg.sender;
+          }
+          function verifyOrder(string memory upc, uint256 quantity, uint256 price, uint256 taxRate) public returns (bool) {
+            require(stockLevels[upc] >= quantity, 'Insufficient stock');
+            require(prices[upc] == price, 'Invalid price');
+            require(taxRates[upc] == taxRate, 'Invalid tax rate');
+            stockLevels[upc] -= quantity;
+            return true;
+          }
+          function updateStock(string memory upc, uint256 quantity, uint256 price, uint256 taxRate) public {
+            require(msg.sender == owner, 'Unauthorized');
+            stockLevels[upc] = quantity;
+            prices[upc] = price;
+            taxRates[upc] = taxRate;
+          }
+        }
+      "
+    }
+  }
+  @ACTION ingest_cigarette {
+    @INPUT {
+      upc_code: string,
+      retailer: string
+    }
+    @EXEC {
+      @VALIDATE inputs {
+        @CHECK upc_code MATCHES "^[0-9]{12,13}$"
+        @CHECK retailer IN ["AMPM", "Coremark"]
+      }
+      @SET timestamp = NOW()
+      @SET tx_hash = SHA3-256(upc_code + retailer + timestamp)
+      @SET quantum_sig = SHA3-512(tx_hash + config.terminal_id)
+      @FETCH upc_data FROM upc_sources {
+        endpoint: config.upc_sources,
+        params: { upc: upc_code }
+      }
+      @IF upc_data.found {
+        @SET item = upc_data.result
+        @RUN sql IN postgresql {
+          query: "
+            INSERT INTO cigarette_inventory (upc_code, brand, variant, retailer, price, stock_qty, tax_rate, metadata)
+            VALUES ('{upc_code}', '{item.brand}', '{item.variant}', '{retailer}', {item.price}, {item.stock_qty}, {config.tax_config.state_taxes[retailer]}, '{item.metadata}')
+            ON CONFLICT (upc_code, retailer) DO UPDATE
+            SET price = {item.price}, stock_qty = {item.stock_qty}, last_updated = '{timestamp}';
+          "
+        }
+        @LOG ingestion TO kafka { type: "cigarette_ingestion", details: "Ingested {upc_code} for {retailer}" }
+      } @ELSE {
+        @LOG error TO kafka { type: "cigarette_ingestion_error", details: "UPC {upc_code} not found" }
+      }
+      @RETURN {
+        status: upc_data.found ? "ingested" : "not_found",
+        tx_hash: tx_hash,
+        quantum_sig: quantum_sig
+      }
+    }
+  }
+  @ACTION process_order {
+    @INPUT {
+      retailer: string,
+      upc_code: string,
+      quantity: int,
+      promotion_id: string = ""
+    }
+    @EXEC {
+      @VALIDATE inputs {
+        @CHECK upc_code MATCHES "^[0-9]{12,13}$"
+        @CHECK retailer IN ["AMPM", "Coremark"]
+        @CHECK quantity IN RANGE(1, 1000)
+      }
+      @SET timestamp = NOW()
+      @SET tx_hash = SHA3-256(upc_code + retailer + quantity + timestamp)
+      @SET quantum_sig = SHA3-512(tx_hash + config.terminal_id)
+      @RUN sql IN postgresql {
+        query: "
+          SELECT price, stock_qty, tax_rate FROM cigarette_inventory
+          WHERE upc_code = '{upc_code}' AND retailer = '{retailer}';
+        "
+      }
+      @IF sql_result.stock_qty >= quantity {
+        @CALL smart_contract.verifyOrder(upc_code, quantity, sql_result.price, sql_result.tax_rate)
+        @RUN sql IN postgresql {
+          query: "
+            INSERT INTO cigarette_orders (retailer, upc_code, quantity, order_status, metadata)
+            VALUES ('{retailer}', '{upc_code}', {quantity}, 'pending', '{{\"promotion_id\": \"{promotion_id}\"}}');
+            UPDATE cigarette_inventory
+            SET stock_qty = stock_qty -
+
+ {quantity}, last_updated = '{timestamp}'
+            WHERE upc_code = '{upc_code}' AND retailer = '{retailer}';
+          "
+        }
+        @LOG order TO kafka { type: "cigarette_order_processing", details: "Order for {quantity} of {upc_code} by {retailer}" }
+        @RENDER tikz {
+          code: "
+            \\begin{tikzpicture}
+              \\filldraw[color=txborder, fill=txbg] (0,0) rectangle (5,3);
+              \\node at (2.5,1.5) {Cigarette Order: {tx_hash}};
+              \\node at (1,2) {Retailer: {retailer}};
+              \\node at (1,1) {Quantity: {quantity}};
+            \\end{tikzpicture}
+          "
+        }
+      } @ELSE {
+        @LOG error TO kafka { type: "cigarette_order_error", details: "Insufficient stock for {upc_code}" }
+      }
+      @RETURN {
+        status: sql_result.stock_qty >= quantity ? "order_processed" : "insufficient_stock",
+        tx_hash: tx_hash,
+        quantum_sig: quantum_sig
+      }
+    }
+  }
+  @ACTION validate_upc_barcode {
+    @INPUT {
+      upc_code: string,
+      retailer: string
+    }
+    @EXEC {
+      @VALIDATE inputs {
+        @CHECK upc_code MATCHES "^[0-9]{12,13}$"
+        @CHECK retailer IN ["AMPM", "Coremark"]
+      }
+      @SET timestamp = NOW()
+      @FETCH upc_data FROM upc_sources {
+        endpoint: config.upc_sources,
+        params: { upc: upc_code }
+      }
+      @IF upc_data.found {
+        @LOG validation TO kafka { type: "upc_validation", details: "Valid UPC {upc_code} for {retailer}" }
+        @RETURN {
+          status: "valid",
+          brand: upc_data.result.brand,
+          variant: upc_data.result.variant
+        }
+      } @ELSE {
+        @LOG error TO kafka { type: "upc_validation_error", details: "Invalid UPC {upc_code} for {retailer}" }
+        @RETURN { status: "invalid" }
+      }
+    }
+  }
+  @ACTION update_promotions {
+    @INPUT {
+      retailer: string,
+      upc_code: string,
+      promotion_type: string,
+      promotion_details: string
+    }
+    @EXEC {
+      @VALIDATE inputs {
+        @CHECK upc_code MATCHES "^[0-9]{12,13}$"
+        @CHECK retailer IN ["AMPM", "Coremark"]
+        @CHECK promotion_type IN ["bundle_deal", "discount", "exclusive_item"]
+      }
+      @SET timestamp = NOW()
+      @RUN sql IN postgresql {
+        query: "
+          UPDATE cigarette_inventory
+          SET metadata = jsonb_set(metadata, '{promotion}', '{\"type\": \"{promotion_type}\", \"details\": \"{promotion_details}\"}', true)
+          WHERE upc_code = '{upc_code}' AND retailer = '{retailer}';
+        "
+      }
+      @LOG promotion TO kafka { type: "promotion_update", details: "Updated promotion {promotion_type} for {upc_code} by {retailer}" }
+      @RETURN {
+        status: "promotion_updated",
+        upc_code: upc_code,
+        promotion_type: promotion_type
+      }
+    }
+  }
+  @OBSERVABILITY {
+    prometheus: {
+      metrics: ["cigarette_scan_accuracy", "inventory_sync_latency", "order_processing_time"],
+      scrape_interval: "5s"
+    }
+    grafana: {
+      dashboards: ["cigarette_inventory_metrics", "general_inventory_metrics"],
+      theme: "dark"
+    }
+    loki: {
+      logs: ["cigarette_ingestion", "cigarette_order_processing", "upc_validation"],
+      retention: "90d"
+    }
+  }
+}
 @System>Language>ALN>Script>cigarette_management.aln
 @Metadata {
   version: "1.0.0"
