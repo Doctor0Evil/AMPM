@@ -1,5 +1,181 @@
 @SCRIPT aln_rego_sandbox_enforcement {
   @CONFIG {
+    session_key: "circlek_pos_session:{user_id}",
+    terminal_id: "CIRCLEK_POS_TX_2045",
+    compliance: ["PCI-DSS", "GDPR", "SOC2", "ISO-8583", "HIPAA", "FIPS", "ISO/IEC 27001"],
+    circlek_api: "https://api.circlek.com/v1",
+    coremark_api: "https://api.coremark.com/v1",
+    postgresql_url: "postgresql://cluster.circlek_pos:5432/circlek_pos_db",
+    docker: {
+      volume: "aln_rego_sandbox_volume",
+      path: "/var/lib/docker/volumes/aln_rego_sandbox_volume"
+    },
+    kubernetes: {
+      namespace: "aln-rego-sandbox",
+      hpa: { min_replicas: 8, max_replicas: 32 }
+    }
+  }
+  @INIT {
+    @CONNECT redis { url: "redis://cluster.circlek_pos:6379", auth: "jwt", ttl: "24h" }
+    @CONNECT postgresql { url: config.postgresql_url, extensions: ["pgvector"] }
+    @CONNECT kafka { url: "kafka://cluster.circlek_pos:9092", partitions: 8 }
+    @CONNECT coremark { url: config.coremark_api, auth: "api_key" }
+    @CREATE volume { name: config.docker.volume, path: config.docker.path }
+    @SETUP rego {
+      version: "0.60.0",
+      mode: "strict",
+      policies: ["pos_transaction_policy", "data_access_policy", "retailer_policy"]
+    }
+  }
+  @ACTION enforce_rego_policies {
+    @INPUT {
+      user_id: string,
+      command: string,
+      retailer: string,
+      transaction_data: map<string, any>,
+      operation_type: string IN ["pos_sale", "chat_query"]
+    }
+    @EXEC {
+      @VALIDATE inputs {
+        @CHECK command MATCHES "^ALIEN_POS_SALE_2025_[A-Z0-9]+_CIRCLEK$"
+        @CHECK retailer == "Circle K"
+        @CHECK operation_type IN ["pos_sale", "chat_query"]
+      }
+      @SET timestamp = NOW()
+      @SET tx_hash = SHA3-256(transaction_data + timestamp)
+      @SET quantum_sig = SHA3-512(tx_hash + config.terminal_id)
+      @REGO policy_check {
+        policy: operation_type == "pos_sale" ? "pos_transaction_policy" : "data_access_policy",
+        input: {
+          user_id: user_id,
+          retailer: retailer,
+          transaction_data: transaction_data,
+          timestamp: timestamp
+        },
+        rules: |
+          package pos_policy
+          default allow = false
+          allow {
+            input.retailer == "Circle K"
+            input.transaction_data.items[_].sku matches "^[A-Z]{2}\\d{4}[A-Z]{3}$"
+            input.transaction_data.payment_type in ["cash", "credit_card"]
+          }
+          package data_access_policy
+          default allow = false
+          allow {
+            input.retailer == "Circle K"
+            input.transaction_data.intents[_] == "check_availability"
+          }
+      }
+      @IF policy_check.allow == false {
+        @RUN sql IN postgresql {
+          query: "
+            INSERT INTO rego_violation_log (command, user_id, retailer, violation_reason, timestamp)
+            VALUES ('{command}', '{user_id}', '{retailer}', 'Policy violation: {policy_check.reason}', '{timestamp}');
+          "
+        }
+        @THROW error { code: "REGO_001", message: "Policy violation: {policy_check.reason}" }
+      }
+      @RUN sql IN postgresql {
+        query: "
+          INSERT INTO rego_execution_log (command, user_id, retailer, policy_name, timestamp)
+          VALUES ('{command}', '{user_id}', '{retailer}', '{policy_check.policy}', '{timestamp}');
+        "
+      }
+      @LOG policy TO kafka {
+        type: "rego_policy_enforced",
+        details: "Enforced {policy_check.policy} for {user_id} at {retailer}"
+      }
+      @RETURN {
+        status: "policy_enforced",
+        tx_hash: tx_hash,
+        quantum_sig: quantum_sig,
+        violations: 0
+      }
+    }
+  }
+  @ACTION process_retailer_transaction {
+    @INPUT {
+      user_id: string,
+      barcode: string,
+      operation_type: string = "pos_sale",
+      transaction_data: map<string, any>,
+      payment_type: string = "cash",
+      loyalty_discount: float = 0.0
+    }
+    @EXEC {
+      @VALIDATE inputs {
+        @CHECK barcode MATCHES "^\\d{8}|\\d{12,14}$"
+        @CHECK transaction_data.items MATCHES "^[A-Z]{2}\\d{4}[A-Z]{3}$" FOR sku
+        @CHECK payment_type IN ["cash", "credit_card"]
+      }
+      @SET timestamp = NOW()
+      @SET tx_hash = SHA3-256(barcode + transaction_data + timestamp)
+      @SET quantum_sig = SHA3-512(tx_hash + config.terminal_id)
+      @FETCH product_info FROM coremark {
+        endpoint: config.coremark_api,
+        query: { barcode: barcode }
+      }
+      @REGO policy_check {
+        policy: "retailer_policy",
+        input: {
+          user_id: user_id,
+          retailer: "Circle K",
+          transaction_data: transaction_data,
+          product_info: product_info,
+          timestamp: timestamp
+        },
+        rules: |
+          package retailer_policy
+          default allow = false
+          allow {
+            input.retailer == "Circle K"
+            input.product_info.category in ["Convenience", "Snacks", "Beverages"]
+            input.transaction_data.items[_].price > 0
+          }
+      }
+      @IF policy_check.allow == false {
+        @RUN sql IN postgresql {
+          query: "
+            INSERT INTO rego_violation_log (command, user_id, retailer, violation_reason, timestamp)
+            VALUES ('ALIEN_POS_SALE_2025_{user_id}_CIRCLEK', '{user_id}', 'Circle K', 'Retailer policy violation', '{timestamp}');
+          "
+        }
+        @THROW error { code: "REGO_002", message: "Retailer policy violation" }
+      }
+      @SET total = REDUCE(transaction_data.items, 0, item => item.qty * item.price) * (1 - loyalty_discount)
+      @RUN sql IN postgresql {
+        query: "
+          INSERT INTO retailer_transactions (user_id, terminal_id, items, total, payment_type, tx_hash, quantum_sig, timestamp, barcode, product_info)
+          VALUES ('{user_id}', '{config.terminal_id}', '{transaction_data.items}', {total}, '{payment_type}', '{tx_hash}', '{quantum_sig}', '{timestamp}', '{barcode}', '{product_info}');
+        "
+      }
+      @LOG transaction TO kafka {
+        type: "retailer_transaction",
+        details: "Processed retailer transaction for {user_id} with barcode {barcode}"
+      }
+      @RENDER tikz {
+        code: "
+          \\begin{tikzpicture}
+            \\filldraw[color=txborder, fill=txbg] (0,0) rectangle (5,3);
+            \\node at (2.5,1.5) {Circle K Retailer Sale: {tx_hash}};
+            \\node at (1,2) {User: {user_id}};
+            \\node at (1,1) {Total: {total} USD};
+            \\node at (1,0.5) {Barcode: {barcode}};
+          \\end{tikzpicture}
+        "
+      }
+      @RETURN {
+        status: "transaction_processed",
+        tx_hash: tx_hash,
+        quantum_sig: quantum_sig,
+        product_info: product_info
+      }
+    }
+  }
+}
+@SCRIPT aln_rego_sandbox_enforcement {
+  @CONFIG {
     session_key: "aln_rego_sandbox_session:{user_id}",
     bot_id: "aln_rego_sandbox_bot",
     virtual_fs: "/alien-vfs/rego_sandbox/invocations-009/",
