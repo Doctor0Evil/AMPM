@@ -1,0 +1,110 @@
+(module ampm_pos_42445
+  (input (inventory_upcs :json) (promotions :csv) (fuel_prices :xml) (chat_queries :json) (store_hours :xml))
+  (output (inventory_report :pdf) (promotion_plan :json) (pricing_analysis :xlsx) (maps_data :geojson) (chat_responses :json)))
+
+(rule (initialize_system
+  (when (not (exists? "C:\\AMPM\\config\\settings.json"))
+   (do
+    (create-file "C:\\AMPM\\config\\settings.json")
+    (write-to-file "{\"coremark_api_key\": \"CM_PHX_42445@2025\", \"gasbuddy_api_key\": \"GB_Phoenix_42445\", \"clover_api\": \"CLVR_PHX_42445\", \"google_maps_api_key\": \"YOUR_API_KEY\"}")))
+  (when (exists? "C:\\AMPM\\config\\settings.json")
+   (do
+    (read-config "C:\\AMPM\\config\\settings.json")
+    (initialize-db "sqlite:///C:\\AMPM\\inventory\\db.sqlite")
+    (execute-sql "CREATE TABLE IF NOT EXISTS inventory (upc TEXT PRIMARY KEY, product TEXT, vendor TEXT, stock INTEGER)"))))
+
+(rule (sync_coremark_prices
+  (when (and (connected? "https://api.coremark.com/v3/prices")
+             (= (current-time) (next-sync-time)))
+   (do
+    (fetch-prices "https://api.coremark.com/v3/sites/42445/prices")
+    (update-pos-prices)
+    (log-event "Coremark price sync completed" :level info)))
+  (when (failed? "https://api.coremark.com/v3/prices")
+   (do
+    (trigger-fallback-price-check)
+    (send-alert "Coremark API unreachable - using fallback pricing"))))
+
+(rule (dynamic_fuel_pricing
+  (when (> (competitor-price "7-Eleven") (our-price "regular"))
+   (do
+    (set-price (- (competitor-price "7-Eleven") 0.03))
+    (log-event "Fuel price adjusted to undercut competitor" :level warning)))
+  (when (holiday?)
+   (do
+    (increase-price (+ (base-price) 0.10))
+    (log-event "Holiday premium applied to fuel prices" :level info))))
+
+(rule (age_restrictions
+  (when (or (attempted_sale "alcohol") (attempted_sale "tobacco") (attempted_sale "lighter") (attempted_sale "lottery"))
+   (do
+    (require_id_scan)
+    (if (customer_age < 21)
+        (do
+         (block_transaction)
+         (log_violation "UNDERAGE_ATTEMPT" fields=[customer_id, product, timestamp])
+         (trigger_alert "Underage sale blocked" severity=CRITICAL))
+        (do
+         (log_transaction "APPROVED" fields=[customer_age, verification_method, employee_id]))))))
+
+(rule (generate_fda_signage
+  (when (new_sale "tobacco")
+   (do
+    (generate_sign "FDA_CIGARETTE_2025" product=$product price=$price)
+    (print_sign "CIGAR_Signage_Printer")
+    (log-event "FDA signage generated for $product" :level info))))
+
+(rule (inventory_management
+  (when (< (stock-level $sku) (* (avg-daily-sales $sku) 0.5))
+   (do
+    (place-order :supplier "Coremark" :quantity (- (max-stock $sku) (current-stock $sku)))
+    (notify-manager :message "CRITICAL STOCK OUT: $sku"))))
+
+(rule (update_google_maps
+  (when (or (changed? store_hours) (updated? pos_inventory) (new_promotion_active?))
+   (do
+    (generate-store-info-json)
+    (submit-to-google-maps 
+      url:"https://mybusiness.googleapis.com/v4/accounts/1234567890/localPosts"
+      headers:{"Authorization": "Bearer $(GOOGLE_MAPS_API_KEY)", "Content-Type": "application/json"}
+      body:(json.dumps(store_info))))
+   (when (failed? google-maps-update)
+    (do
+     (log-error "Google Maps update failed" :level error)
+     (trigger-backup-storage)))))
+
+(rule (chatbot_query_handler
+  (when (received? chat_query)
+   (do
+    (parse-query chat_query)
+    (if (about? chat_query "hours")
+        (respond-with store_hours)
+        (if (about? chat_query "inventory")
+            (respond-with pos_inventory)
+            (if (about? chat_query "fuel_price")
+                (respond-with current_fuel_price)
+                (default-response)))))
+   (when (scheduled? :interval 30m)
+    (do
+     (fetch-recent-queries)
+     (analyze-trends)
+     (optimize-chatbot-responses)))))
+
+(rule (promotions_management
+  (when (new_promotion_active?)
+   (do
+    (update-promotions-table)
+    (generate-promotion-signage)
+    (notify-customers :channel mobile_app)))
+  (when (expired-promotion?)
+   (do
+    (remove-old-signage)
+    (archive-promotion-data))))
+
+(rule (compliance_audit
+  (when (= (current-day) reporting-day)
+   (do
+    (generate-tax-report)
+    (submit-to-coremark)
+    (submit-to-state-authority "AZ_Lottery_Bureau")
+    (archive-compliance-documents))))
