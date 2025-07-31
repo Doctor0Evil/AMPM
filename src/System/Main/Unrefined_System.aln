@@ -1,3 +1,257 @@
+@System>Language>ALN>Script>sub_dependencies.aln
+@Metadata {
+  version: "1.0.0",
+  description: "Sub-dependencies for QuantumSynergyPOS with autonomous UPC merchandise catalog integration and ALN-Chatbot",
+  compliance: ["PCI-DSS", "GDPR", "HIPAA", "SOC2", "ISO-8583"],
+  created_at: "2025-07-30T20:43:00-07:00",
+  target_retailers: ["Walmart", "Target", "Circle K", "Fry's", "Food City", "AMPM", "QuickTrip", "ARCO", "Bashas", "GameStop"]
+}
+
+@Dependency>Package>AMPM_UPC_Merch {
+  @Description: "Autonomous UPC merchandise catalog for retail stores with universal categorization and UI"
+  @Version: "2.1.0"
+  @Features: [
+    "autonomous_item_ingestion",
+    "universal_categorization",
+    "employee_friendly_ui",
+    "real_time_inventory_sync",
+    "barcode_validation",
+    "multi_retailer_support"
+  ]
+  @Dependencies: [
+    "upc_lookup_api>=1.5.0",
+    "barcode_validator>=3.2.0",
+    "inventory_sync>=4.0.0",
+    "ui_framework>=2.8.0",
+    "category_engine>=1.3.0",
+    "kafka_event_stream>=3.6.0",
+    "postgresql_driver>=15.0.0",
+    "redis_cache>=7.0.0",
+    "milvus_vector_db>=2.3.0",
+    "rag_embedding>=1.2.0",
+    "blockchain_connector>=2.0.0",
+    "prometheus_metrics>=2.5.0",
+    "grafana_dashboard>=8.0.0",
+    "loki_logging>=2.2.0"
+  ]
+  @Configuration {
+    upc_sources: [
+      "https://upcdatabase.org/api/v1",
+      "https://www.barcodelookup.com/api",
+      "https://www.upcitemdb.com/api",
+      "https://api.upcdatabase.org/v2"
+    ]
+    barcode_standards: ["UPC-A", "EAN-13", "UPC-E", "EAN-8"]
+    categories: [
+      "Electronics", "Home Goods", "Groceries", "Convenience", "Bakery",
+      "Produce", "Cigarettes", "Beverages", "Liquor", "Apparel", "Meat", "Gaming"
+    ]
+    ui: {
+      framework: "React",
+      styling: "TailwindCSS",
+      components: ["ItemGrid", "CategoryTree", "SearchBar", "InventoryTable"],
+      accessibility: "WCAG_2.1"
+    }
+    database: {
+      type: "PostgreSQL",
+      schema: "merchandise_catalog",
+      encryption: "AES-256"
+    }
+    caching: {
+      type: "Redis",
+      ttl: "24h",
+      snapshot_interval: "900s"
+    }
+    logging: {
+      type: "Kafka",
+      topics: ["merchandise_ingestion", "inventory_updates", "barcode_scans"]
+    }
+  }
+  @AutonomousBehavior {
+    @INIT {
+      @CONNECT upc_sources { auth: "api_key", retry: 3 }
+      @CONNECT postgresql { url: "postgresql://cluster.pos_quantum_synergy_chat:5432/merch_db" }
+      @CONNECT redis { url: "redis://cluster.pos_quantum_synergy_chat:6379" }
+      @CONNECT kafka { url: "kafka://cluster.pos_quantum_synergy_chat:9092" }
+      @CREATE table IN postgresql {
+        query: "
+          CREATE TABLE IF NOT EXISTS merchandise_catalog (
+            item_id SERIAL PRIMARY KEY,
+            upc_code VARCHAR(13) NOT NULL,
+            item_name VARCHAR(100) NOT NULL,
+            category VARCHAR(50) NOT NULL,
+            retailer VARCHAR(50) NOT NULL,
+            price DECIMAL(10,2) NOT NULL,
+            stock_qty INT NOT NULL,
+            last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            metadata JSONB,
+            UNIQUE(upc_code, retailer)
+          );
+        "
+      }
+    }
+    @ACTION ingest_merchandise {
+      @INPUT {
+        upc_code: string,
+        retailer: string
+      }
+      @EXEC {
+        @VALIDATE upc_code MATCHES "^\\d{12,13}$"
+        @SET item_data = CALL upc_lookup_api.query(upc_code)
+        @SET category = CALL category_engine.classify(item_data.description)
+        @SET price = item_data.price OR CALL pricing_model.predict(item_data)
+        @SET stock_qty = CALL inventory_sync.initial_stock(retailer, upc_code)
+        @RUN sql IN postgresql {
+          query: "
+            INSERT INTO merchandise_catalog (upc_code, item_name, category, retailer, price, stock_qty, metadata)
+            VALUES ('{upc_code}', '{item_data.name}', '{category}', '{retailer}', {price}, {stock_qty}, '{item_data.metadata}')
+            ON CONFLICT (upc_code, retailer) DO UPDATE
+            SET item_name = EXCLUDED.item_name,
+                category = EXCLUDED.category,
+                price = EXCLUDED.price,
+                stock_qty = EXCLUDED.stock_qty,
+                metadata = EXCLUDED.metadata,
+                last_updated = CURRENT_TIMESTAMP;
+          "
+        }
+        @CACHE item_data IN redis { key: "upc:{upc_code}:{retailer}", ttl: "24h" }
+        @LOG ingestion TO kafka { topic: "merchandise_ingestion", details: "Ingested {upc_code} for {retailer}" }
+        @RETURN {
+          status: "ingested",
+          item_id: item_data.item_id,
+          category: category
+        }
+      }
+    }
+    @ACTION sync_inventory {
+      @INPUT {
+        retailer: string,
+        upc_codes: list<string>
+      }
+      @EXEC {
+        @FOR_EACH upc_code IN upc_codes {
+          @SET stock_qty = CALL inventory_sync.get_stock(retailer, upc_code)
+          @RUN sql IN postgresql {
+            query: "
+              UPDATE merchandise_catalog
+              SET stock_qty = {stock_qty},
+                  last_updated = CURRENT_TIMESTAMP
+              WHERE upc_code = '{upc_code}' AND retailer = '{retailer}';
+            "
+          }
+          @LOG update TO kafka { topic: "inventory_updates", details: "Updated {upc_code} stock for {retailer}" }
+        }
+        @RETURN { status: "synced", updated_count: upc_codes.length }
+      }
+    }
+    @ACTION render_ui {
+      @OUTPUT {
+        component: "ReactApp",
+        endpoint: "/ui/merchandise"
+      }
+      @EXEC {
+        @RENDER react {
+          code: "
+            import React, { useState, useEffect } from 'https://cdn.jsdelivr.net/npm/react@18.2.0/dist/react.min.js';
+            import ReactDOM from 'https://cdn.jsdelivr.net/npm/react-dom@18.2.0/dist/react-dom.min.js';
+            import 'https://cdn.tailwindcss.com';
+
+            const App = () => {
+              const [items, setItems] = useState([]);
+              const [category, setCategory] = useState('All');
+              const [search, setSearch] = useState('');
+
+              useEffect(() => {
+                fetch('/api/merchandise')
+                  .then(res => res.json())
+                  .then(data => setItems(data));
+              }, []);
+
+              const filteredItems = items.filter(item =>
+                (category === 'All' || item.category === category) &&
+                item.name.toLowerCase().includes(search.toLowerCase())
+              );
+
+              return (
+                <div className='container mx-auto p-4'>
+                  <h1 className='text-2xl font-bold mb-4'>Merchandise Catalog</h1>
+                  <div className='flex mb-4'>
+                    <select
+                      className='mr-2 p-2 border rounded'
+                      onChange={e => setCategory(e.target.value)}
+                    >
+                      <option>All</option>
+                      {[...new Set(items.map(item => item.category))].map(cat => (
+                        <option key={cat}>{cat}</option>
+                      ))}
+                    </select>
+                    <input
+                      type='text'
+                      placeholder='Search items...'
+                      className='p-2 border rounded w-full'
+                      onChange={e => setSearch(e.target.value)}
+                    />
+                  </div>
+                  <div className='grid grid-cols-4 gap-4'>
+                    {filteredItems.map(item => (
+                      <div key={item.upc_code} className='border p-4 rounded'>
+                        <h3 className='font-bold'>{item.name}</h3>
+                        <p>Category: {item.category}</p>
+                        <p>Price: ${item.price}</p>
+                        <p>Stock: {item.stock_qty}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            };
+
+            ReactDOM.render(<App />, document.getElementById('root'));
+          "
+        }
+        @RETURN { status: "rendered", endpoint: "/ui/merchandise" }
+      }
+    }
+  }
+}
+
+@System>Function>Call>Virta-Sys>ALN_Chatbot {
+  @Description: "ALN-Chatbot for customer support and query handling"
+  @Version: "1.0.0"
+  @Configuration {
+    bot_id: "aln_chatbot",
+    rag_model: "all-MiniLM-L12-v2",
+    vector_db: "milvus",
+    endpoints: {
+      query: "/api/v1/chat/query",
+      feedback: "/api/v1/chat/feedback"
+    }
+  }
+  @ACTION handle_query {
+    @INPUT {
+      user_id: string,
+      query_text: string,
+      context: map<string, any>
+    }
+    @EXEC {
+      @INJECT rag {
+        model: config.rag_model,
+        context: ["query: {query_text}", "user: {user_id}", "metadata: {context}"],
+        vector_db: config.vector_db,
+        top_k: 15
+      }
+      @SET response = CALL ALN_Chatbot.generate_response(query_text, rag_output)
+      @RUN sql IN postgresql {
+        query: "
+          INSERT INTO conversation_flows (bot_id, user_id, intents, responses, platform, timestamp)
+          VALUES ('{config.bot_id}', '{user_id}', '{rag_output.intents}', '{response}', 'web', CURRENT_TIMESTAMP);
+        "
+      }
+      @LOG query TO kafka { topic: "chat_interactions", details: "Query processed for {user_id}" }
+      @RETURN { status: "responded", response: response }
+    }
+  }
+}
 @SCRIPT aln_rego_sandbox_enforcement {
   @CONFIG {
     session_key: "circlek_pos_session:{user_id}",
