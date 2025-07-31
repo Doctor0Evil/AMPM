@@ -1,3 +1,470 @@
+@SCRIPT aln_am_pm_veeder_root_safety_enhanced_v6 {
+  @CONFIG {
+    session_key: "aln_am_pm_safety_session_v6:{user_id}",
+    bot_id: "aln_am_pm_safety_bot_v6",
+    virtual_fs: "/alien-vfs/am_pm/safety_invocations-015/",
+    compliance: ["PCI-DSS", "GDPR", "SOC2", "ISO-8583", "HIPAA", "FIPS", "ISO/IEC 27001", "AZ_ARS_TITLE_4", "NFPA_30", "EPA_UST", "DOT_HAZMAT", "OSHA_1910", "API_2000"],
+    encryption: "AES-256-GCM",
+    jwt_secret: "aln_jwt_am_pm_safety_2025_v12",
+    version: "6.0.0",
+    timestamp: "2025-07-31T16:14:00-07:00",
+    rego_policy_engine: {
+      version: "0.65.0",
+      role: "Enforce safety-enhanced policy execution with fuel handling compliance",
+      config: {
+        policy_dir: "/alien-vfs/rego_policies_am_pm_v6/",
+        strict_mode: true,
+        violation_action: "block_alert_escalate",
+        max_policy_size: "5MB",
+        failover: "redundant_policy_engine"
+      }
+    },
+    retailer_specific: {
+      ampm: {
+        store_types: ["convenience", "fuel"],
+        pos_systems: ["Verifone_C18", "Verifone_M450", "Clover_POS", "Veeder_Root_TLS_450PLUS"],
+        policy_restrictions: ["no_unverified_upc", "age_restricted_sales", "az_tobacco_laws", "epa_ust_compliance", "nfpa_30", "dot_hazmat_safety", "osha_fuel_handling"]
+      }
+    },
+    veeder_root: {
+      models: ["TLS-350", "TLS-450PLUS", "TLS4", "TLS4B"],
+      telemetry_endpoints: ["https://api.veeder.com/v3/tls_data", "https://api.veeder.com/v3/alarms", "https://api.veeder.com/v3/diagnostics"],
+      sensors: ["mag_probes", "vapor_pressure", "sump_sensors", "line_leak_detectors", "overfill_prevention", "corrosion_sensors"],
+      calibration_frequency: "60d",
+      api_auth: "oauth2",
+      failover: {
+        backup_endpoint: "https://backup.api.veeder.com/v3/fallback",
+        retry_attempts: 5,
+        retry_interval: "30s"
+      }
+    },
+    verifone: {
+      dcrs_models: ["Commander", "C18", "M450", "MX925"],
+      tech_support_endpoint: "https://api.verifone.com/v2/support/schedule",
+      api_auth: "oauth2",
+      failover: {
+        backup_endpoint: "https://backup.api.verifone.com/v2/fallback",
+        retry_attempts: 3,
+        retry_interval: "15s"
+      }
+    },
+    fuel_carrier: {
+      api_endpoint: "https://api.fuelcarrier.com/v3/scheduling",
+      safety_standards: ["DOT_HAZMAT", "FMCSA_396", "API_2000"],
+      supported_carriers: ["UPS_Fuel", "FedEx_Fuel", "Pinnacle", "Colonial", "Magellan"],
+      api_auth: "oauth2",
+      failover: {
+        backup_endpoint: "https://backup.api.fuelcarrier.com/v3/fallback",
+        retry_attempts: 4,
+        retry_interval: "20s"
+      }
+    },
+    safety_modes: {
+      fuel_handling: {
+        spill_prevention: "enabled",
+        overfill_protection: "mandatory",
+        vapor_recovery: "API_2000_compliant",
+        emergency_shutdown: "auto_trigger",
+        redundant_sensors: ["mag_probes", "sump_sensors"]
+      },
+      transportation: {
+        hazmat_compliance: "DOT_HAZMAT_171_180",
+        driver_monitoring: "FMCSA_395_compliant",
+        route_validation: "geo_fenced",
+        emergency_response: "OSHA_1910.120"
+      },
+      delivery: {
+        tank_integrity_check: "pre_post_delivery",
+        volume_verification: "dual_sensor",
+        chain_of_custody: "blockchain_tracked"
+      }
+    }
+  }
+
+  @INIT {
+    @CONNECT redis { url: "redis://cluster.aln_am_pm_v6:6379", auth: "jwt", ttl: "240h", failover: "redis_sentinel" }
+    @CONNECT postgresql { url: "postgresql://cluster.aln_am_pm_v6:5432/am_pm_db_v6", extensions: ["pgvector", "timescaledb"], failover: "pgpool_standby" }
+    @CONNECT kafka { url: "kafka://cluster.aln_am_pm_v6:9092", partitions: 120, replication_factor: 9, failover: "kafka_mirror" }
+    @CONNECT milvus { url: "milvus://cluster.aln_am_pm_v6:19530", version: "2.4.4", failover: "milvus_standby" }
+    @CONNECT veeder_root_api { url: config.veeder_root.telemetry_endpoints[0], auth: config.veeder_root.api_auth, failover: config.veeder_root.failover }
+    @CONNECT verifone_api { url: config.verifone.tech_support_endpoint, auth: config.verifone.api_auth, failover: config.verifone.failover }
+    @CONNECT fuel_carrier_api { url: config.fuel_carrier.api_endpoint, auth: config.fuel_carrier.api_auth, failover: config.fuel_carrier.failover }
+    @SYNC platforms { targets: ["ampm_pos", "veeder_root_tls", "verifone_dcrs", "fuel_carrier"], mode: "bidirectional_with_fallback" }
+    @CONFIG docker {
+      volume: "aln_am_pm_safety_volume_v6",
+      commands: {
+        create: "docker volume create aln_am_pm_safety_volume_v6",
+        run: "docker run -v aln_am_pm_safety_volume_v6:/data aln_am_pm_safety_image_v6",
+        inspect: "docker volume inspect aln_am_pm_safety_volume_v6"
+      }
+    }
+    @CREATE TABLE IN postgresql {
+      table: "veeder_root_safety_logs",
+      schema: "CREATE TABLE veeder_root_safety_logs (id SERIAL PRIMARY KEY, tank_id VARCHAR(50), sensor_type VARCHAR(50), metric JSONB, safety_status VARCHAR(20), fail_safe_action VARCHAR(50), timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP);"
+    }
+    @CREATE TABLE IN postgresql {
+      table: "fuel_safety_incidents",
+      schema: "CREATE TABLE fuel_safety_incidents (id SERIAL PRIMARY KEY, incident_id VARCHAR(50), tank_id VARCHAR(50), incident_type VARCHAR(50), description TEXT, severity VARCHAR(20), fail_safe_action VARCHAR(50), timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP);"
+    }
+    @CREATE TABLE IN postgresql {
+      table: "fuel_delivery_safety_checks",
+      schema: "CREATE TABLE fuel_delivery_safety_checks (id SERIAL PRIMARY KEY, delivery_id VARCHAR(50), store_id VARCHAR(50), safety_check JSONB, status VARCHAR(20), timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP);"
+    }
+    @CREATE TABLE IN postgresql {
+      table: "transportation_safety_logs",
+      schema: "CREATE TABLE transportation_safety_logs (id SERIAL PRIMARY KEY, carrier_id VARCHAR(50), driver_id VARCHAR(50), route_id VARCHAR(50), safety_check JSONB, status VARCHAR(20), timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP);"
+    }
+  }
+
+  @ACTION process_veeder_root_safety_telemetry {
+    @INPUT {
+      tank_id: string,
+      sensor_data: list<{sensor_type: string, value: float, unit: string, timestamp: string, redundant_sensor_value: float}>,
+      store_id: string
+    }
+    @EXEC {
+      @SET tx_hash = SHA3-256(tank_id + sensor_data + store_id + NOW())
+      @SET quantum_sig = SHA3-512(tx_hash + config.session_key)
+      @VALIDATE sensor_data {
+        @CHECK sensor_type IN config.veeder_root.sensors
+        @CHECK value IS NUMBER
+        @CHECK redundant_sensor_value IS NUMBER
+        @CHECK ABS(value - redundant_sensor_value) <= 0.05 * value ELSE @THROW "Redundant sensor discrepancy"
+        @CHECK unit IN ["in", "psi", "gal", "temp_f", "ppm"]
+      }
+      @IF validate.result {
+        @CALL veeder_root_api.get_telemetry {
+          api_request: "curl -X POST {config.veeder_root.telemetry_endpoints[0]} -H 'Authorization: Bearer {config.veeder_root.api_auth}' -d '{sensor_data}'",
+          failover: config.veeder_root.failover
+        }
+        @CHECK safety_modes.fuel_handling {
+          @IF sensor_type == "overfill_prevention" AND value > 95% THEN @TRIGGER config.safety_modes.fuel_handling.emergency_shutdown
+          @IF sensor_type == "vapor_pressure" AND value > 1.5 THEN @TRIGGER config.safety_modes.fuel_handling.vapor_recovery
+        }
+        @RUN sql IN postgresql {
+          query: "INSERT INTO veeder_root_safety_logs (tank_id, sensor_type, metric, safety_status, fail_safe_action, timestamp) VALUES ('{tank_id}', '{sensor_data.sensor_type}', '{sensor_data}', 'safe', 'none', NOW());"
+        }
+        @LOG event TO kafka {
+          type: "veeder_root_safety_telemetry",
+          details: "Processed safety telemetry for tank: {tank_id}, store: {store_id}, tx: {tx_hash}"
+        }
+        @RETURN { status: "success", tx_hash: tx_hash, quantum_sig: quantum_sig }
+      } @ELSE {
+        @SAVE incident TO postgresql {
+          table: "fuel_safety_incidents",
+          data: { incident_id: "FSI-" + RAND(100,999), tank_id: tank_id, incident_type: "invalid_sensor_data", description: "Invalid or discrepant sensor data", severity: "Critical", fail_safe_action: "Blocked and alerted", timestamp: NOW() }
+        }
+        @TRIGGER alert { channel: "slack", message: "Veeder-Root sensor failure for tank {tank_id}: Invalid data" }
+        @THROW "Invalid sensor data or discrepancy"
+      }
+    }
+  }
+
+  @ACTION troubleshoot_veeder_root_safety_alarms {
+    @INPUT {
+      alarm_id: string,
+      tank_id: string,
+      alarm_type: string
+    }
+    @EXEC {
+      @SET error_map = {
+        "Gross_Test_Fail": {
+          description: "3 gph test failure in fuel line or tank",
+          troubleshoot: ["Verify line pressure", "Inspect for leaks", "Recalibrate mag probe", "Check redundant sensor"],
+          maintenance: "Immediate inspection",
+          fail_safe: "Halt fuel dispensing"
+        },
+        "PLLD_Shutdown": {
+          description: "ATG shuts down line due to failed leak test",
+          troubleshoot: ["Verify pump operation", "Check sensor wiring", "Run diagnostic test", "Validate redundant sensor"],
+          maintenance: "Monthly line test",
+          fail_safe: "Lock fuel pumps"
+        },
+        "Sensor_Fuel_Alarm": {
+          description: "Fuel detected in sump or monitored area",
+          troubleshoot: ["Inspect sump for leaks", "Clean sensor", "Verify sensor placement", "Cross-check redundant sensor"],
+          maintenance: "Weekly sump inspection",
+          fail_safe: "Activate spill containment"
+        },
+        "Mag_Sensor_Communication": {
+          description: "Hardware failure in sensor or wiring",
+          troubleshoot: ["Check wiring connections", "Replace sensor if faulty", "Test console", "Verify redundant sensor"],
+          maintenance: "Quarterly wiring check",
+          fail_safe: "Switch to backup sensor"
+        },
+        "Overfill_Alarm": {
+          description: "Fuel level exceeds 95% capacity",
+          troubleshoot: ["Reduce tank volume", "Check probe calibration", "Adjust limit settings", "Validate overfill sensor"],
+          maintenance: "Monthly calibration",
+          fail_safe: "Trigger emergency shutdown"
+        },
+        "Corrosion_Detected": {
+          description: "Corrosion sensor indicates tank degradation",
+          troubleshoot: ["Inspect tank lining", "Test corrosion sensor", "Schedule tank replacement", "Cross-check redundant sensor"],
+          maintenance: "Annual tank inspection",
+          fail_safe: "Schedule immediate maintenance"
+        },
+        "Vapor_Pressure_Anomaly": {
+          description: "Vapor pressure exceeds safe threshold",
+          troubleshoot: ["Check vapor recovery system", "Inspect vent lines", "Recalibrate pressure sensor"],
+          maintenance: "Bi-weekly vapor system check",
+          fail_safe: "Activate vapor recovery protocol"
+        }
+      }
+      @IF error_map[alarm_type] {
+        @RUN sql IN postgresql {
+          query: "INSERT INTO fuel_safety_incidents (incident_id, tank_id, incident_type, description, severity, fail_safe_action) VALUES ('{alarm_id}', '{tank_id}', '{alarm_type}', '{error_map[alarm_type].description}', 'Critical', '{error_map[alarm_type].fail_safe}');"
+        }
+        @SCHEDULE maintenance {
+          task: error_map[alarm_type].maintenance,
+          frequency: "as_needed",
+          endpoint: config.veeder_root.telemetry_endpoints[1]
+        }
+        @TRIGGER fail_safe {
+          action: error_map[alarm_type].fail_safe,
+          endpoint: config.veeder_root.telemetry_endpoints[2]
+        }
+        @LOG event TO kafka {
+          type: "veeder_root_safety_alarm",
+          details: "Safety alarm {alarm_id} for tank {tank_id}: {error_map[alarm_type].description}, fail-safe: {error_map[alarm_type].fail_safe}"
+        }
+        @RETURN { status: "troubleshooting", steps: error_map[alarm_type].troubleshoot, maintenance: error_map[alarm_type].maintenance, fail_safe: error_map[alarm_type].fail_safe }
+      } @ELSE {
+        @THROW "Unknown safety alarm type: {alarm_type}"
+      }
+    }
+  }
+
+  @ACTION schedule_fuel_delivery_safety {
+    @INPUT {
+      store_id: string,
+      fuel_type: string,
+      volume_gal: int,
+      preferred_time: string,
+      carrier_id: string
+    }
+    @EXEC {
+      @SET tx_hash = SHA3-256(store_id + fuel_type + volume_gal + preferred_time + carrier_id + NOW())
+      @SET quantum_sig = SHA3-512(tx_hash + config.session_key)
+      @VALIDATE inputs {
+        @CHECK volume_gal > 0
+        @CHECK fuel_type IN ["regular", "premium", "diesel"]
+        @CHECK preferred_time MATCHES "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}$"
+        @CHECK carrier_id IN config.fuel_carrier.supported_carriers
+      }
+      @IF validate.result {
+        @CALL fuel_carrier_api.schedule_delivery {
+          api_request: "curl -X POST {config.fuel_carrier.api_endpoint} -H 'Authorization: Bearer {config.fuel_carrier.api_auth}' -d '{store_id, fuel_type, volume_gal, preferred_time, carrier_id}'",
+          failover: config.fuel_carrier.failover
+        }
+        @CHECK safety_modes.delivery {
+          @RUN tank_integrity_check {
+            endpoint: config.veeder_root.telemetry_endpoints[2],
+            query: "SELECT metric FROM veeder_root_safety_logs WHERE tank_id = '{store_id}_tank' AND sensor_type = 'corrosion_sensors' ORDER BY timestamp DESC LIMIT 1;"
+          }
+          @IF tank_integrity_check.metric.ppm > 100 THEN @THROW "Tank integrity failure: corrosion detected"
+          @RUN volume_verification {
+            endpoint: config.veeder_root.telemetry_endpoints[0],
+            query: "SELECT metric FROM veeder_root_safety_logs WHERE tank_id = '{store_id}_tank' AND sensor_type = 'mag_probes' ORDER BY timestamp DESC LIMIT 2;"
+          }
+          @IF ABS(volume_verification[0].value - volume_verification[1].value) > 0.05 * volume_verification[0].value THEN @THROW "Volume verification failed: sensor discrepancy"
+        }
+        @SAVE chain_of_custody TO blockchain {
+          ledger: "CustomPOSLedger",
+          data: { store_id: store_id, fuel_type: fuel_type, volume_gal: volume_gal, carrier_id: carrier_id, tx_hash: tx_hash }
+        }
+        @RUN sql IN postgresql {
+          query: "INSERT INTO fuel_delivery_safety_checks (delivery_id, store_id, safety_check, status) VALUES ('DEL-' + RAND(100,999), '{store_id}', '{tank_integrity_check, volume_verification}', 'passed');"
+        }
+        @RUN sql IN postgresql {
+          query: "INSERT INTO fuel_delivery_schedules (carrier_id, store_id, delivery_time, fuel_type, volume_gal, status) VALUES ('{carrier_id}', '{store_id}', '{preferred_time}', '{fuel_type}', {volume_gal}, 'scheduled');"
+        }
+        @LOG event TO kafka {
+          type: "fuel_delivery_safety_schedule",
+          details: "Scheduled safe delivery for store: {store_id}, fuel: {fuel_type}, volume: {volume_gal} gal, tx: {tx_hash}"
+        }
+        @RETURN { status: "scheduled", tx_hash: tx_hash, quantum_sig: quantum_sig }
+      } @ELSE {
+        @SAVE incident TO postgresql {
+          table: "fuel_safety_incidents",
+          data: { incident_id: "FSI-" + RAND(100,999), tank_id: "{store_id}_tank", incident_type: "invalid_delivery_params", description: "Invalid delivery parameters", severity: "High", fail_safe_action: "Blocked delivery", timestamp: NOW() }
+        }
+        @THROW "Invalid delivery parameters"
+      }
+    }
+  }
+
+  @ACTION monitor_transportation_safety {
+    @INPUT {
+      carrier_id: string,
+      driver_id: string,
+      route_id: string,
+      vehicle_id: string
+    }
+    @EXEC {
+      @SET tx_hash = SHA3-256(carrier_id + driver_id + route_id + vehicle_id + NOW())
+      @SET quantum_sig = SHA3-512(tx_hash + config.session_key)
+      @VALIDATE inputs {
+        @CHECK carrier_id IN config.fuel_carrier.supported_carriers
+        @CHECK route_id MATCHES "^[A-Z0-9]{8}$"
+      }
+      @IF validate.result {
+        @CHECK safety_modes.transportation {
+          @CALL fuel_carrier_api.driver_compliance {
+            api_request: "curl -X GET {config.fuel_carrier.api_endpoint}/drivers/{driver_id}/compliance -H 'Authorization: Bearer {config.fuel_carrier.api_auth}'"
+          }
+          @IF NOT driver_compliance.fmcsa_395_compliant THEN @THROW "Driver non-compliant with FMCSA 395"
+          @CALL fuel_carrier_api.route_validation {
+            api_request: "curl -X GET {config.fuel_carrier.api_endpoint}/routes/{route_id}/geo_fence -H 'Authorization: Bearer {config.fuel_carrier.api_auth}'"
+          }
+          @IF NOT route_validation.geo_fenced THEN @THROW "Route not geo-fenced"
+        }
+        @RUN sql IN postgresql {
+          query: "INSERT INTO transportation_safety_logs (carrier_id, driver_id, route_id, safety_check, status) VALUES ('{carrier_id}', '{driver_id}', '{route_id}', '{driver_compliance, route_validation}', 'safe');"
+        }
+        @LOG event TO kafka {
+          type: "transportation_safety_check",
+          details: "Safe transportation verified for carrier: {carrier_id}, route: {route_id}, tx: {tx_hash}"
+        }
+        @RETURN { status: "safe", tx_hash: tx_hash, quantum_sig: quantum_sig }
+      } @ELSE {
+        @SAVE incident TO postgresql {
+          table: "fuel_safety_incidents",
+          data: { incident_id: "FSI-" + RAND(100,999), tank_id: null, incident_type: "transportation_violation", description: "Invalid transportation parameters", severity: "Critical", fail_safe_action: "Halted transport", timestamp: NOW() }
+        }
+        @THROW "Invalid transportation parameters"
+      }
+    }
+  }
+
+  @ACTION schedule_verifone_tech_support_safety {
+    @INPUT {
+      dcrs_id: string,
+      issue_type: string,
+      preferred_time: string
+    }
+    @EXEC {
+      @SET tx_hash = SHA3-256(dcrs_id + issue_type + preferred_time + NOW())
+      @SET quantum_sig = SHA3-512(tx_hash + config.session_key)
+      @VALIDATE inputs {
+        @CHECK issue_type IN ["payment_failure", "connection_error", "hardware_fault", "software_update", "safety_protocol_error"]
+        @CHECK preferred_time MATCHES "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}$"
+        @CHECK dcrs_id IN config.verifone.dcrs_models
+      }
+      @IF validate.result {
+        @CALL verifone_api.schedule_support {
+          api_request: "curl -X POST {config.verifone.tech_support_endpoint} -H 'Authorization: Bearer {config.verifone.api_auth}' -d '{dcrs_id, issue_type, preferred_time}'",
+          failover: config.verifone.failover
+        }
+        @RUN sql IN postgresql {
+          query: "INSERT INTO verifone_tech_support (dcrs_id, issue_type, schedule_time, technician_id, status) VALUES ('{dcrs_id}', '{issue_type}', '{preferred_time}', 'VT-' + RAND(100,999), 'scheduled');"
+        }
+        @LOG event TO kafka {
+          type: "verifone_safety_tech_support",
+          details: "Scheduled safety support for DCRS: {dcrs_id}, issue: {issue_type}, tx: {tx_hash}"
+        }
+        @RETURN { status: "scheduled", tx_hash: tx_hash, quantum_sig: quantum_sig }
+      } @ELSE {
+        @SAVE incident TO postgresql {
+          table: "fuel_safety_incidents",
+          data: { incident_id: "FSI-" + RAND(100,999), tank_id: null, incident_type: "verifone_support_failure", description: "Invalid tech support parameters", severity: "High", fail_safe_action: "Blocked support request", timestamp: NOW() }
+        }
+        @THROW "Invalid tech support parameters"
+      }
+    }
+  }
+
+  @LOOP always_on_safety_monitoring {
+    @WHILE true {
+      @FETCH metrics FROM prometheus {
+        targets: ["veeder_root_tls", "fuel_carrier_api", "verifone_dcrs", "ampm_pos"],
+        metrics: ["safety_incident_rate", "telemetry_discrepancy_rate", "delivery_safety_compliance", "transportation_safety_compliance", "verifone_uptime"]
+      }
+      @IF metrics.safety_incident_rate > 0.001 {
+        @TRIGGER alert {
+          channel: "slack_email",
+          message: "Safety incident rate exceeded: {metrics.safety_incident_rate}"
+        }
+      }
+      @IF metrics.telemetry_discrepancy_rate > 0.002 {
+        @TRIGGER alert {
+          channel: "slack_email",
+          message: "Telemetry discrepancy rate exceeded: {metrics.telemetry_discrepancy_rate}"
+        }
+      }
+      @LOG metrics TO loki {
+        tags: ["safety_monitoring", "veeder_root", "fuel_delivery", "transportation", "verifone"]
+      }
+      @SLEEP 3
+    }
+  }
+
+  @UPC_CATALOG {
+    @ITEMS [
+      { upc: "012000001390", product: "Aquafina Water", category: "beverages", size: "20 fl oz", weight: 1.25, calories: 0, price: 1.99 },
+      { upc: "028000002027", product: "Butterfinger", category: "candy", size: "1.9 oz", weight: 0.12, calories: 250, price: 1.59 },
+      { upc: "042000000177", product: "Marlboro Gold", category: "cigarettes", size: "20 pack", weight: 0.05, calories: 0, price: 8.99 },
+      { upc: "083900000170", product: "Budweiser", category: "alcohol", size: "12 fl oz", weight: 0.75, calories: 145, price: 2.69 },
+      { upc: "012345679005", product: "AM/PM Corn Dog", category: "hot_foods", size: "5 oz", weight: 0.31, calories: 280, price: 2.49 },
+      { upc: "049000000496", product: "Pepsi Zero Sugar", category: "beverages", size: "12 fl oz", weight: 0.75, calories: 0, price: 1.99 },
+      { upc: "040000000392", product: "Almond Joy", category: "candy", size: "1.61 oz", weight: 0.10, calories: 220, price: 1.49 },
+      { upc: "042000000184", product: "Camel Turkish Gold", category: "cigarettes", size: "20 pack", weight: 0.05, calories: 0, price: 9.29 },
+      { upc: "073930000108", product: "Miller Lite", category: "alcohol", size: "12 fl oz", weight: 0.75, calories: 96, price: 2.49 },
+      { upc: "012345679012", product: "AM/PM Chicken Strips", category: "hot_foods", size: "6 oz", weight: 0.38, calories: 350, price: 3.99 },
+      { upc: "012000001406", product: "Lipton Iced Tea", category: "beverages", size: "20 fl oz", weight: 1.25, calories: 120, price: 2.29 },
+      { upc: "034000000496", product: "Twizzlers", category: "candy", size: "2.5 oz", weight: 0.16, calories: 200, price: 1.69 },
+      { upc: "042000000191", product: "Newport Non-Menthol", category: "cigarettes", size: "20 pack", weight: 0.05, calories: 0, price: 9.49 },
+      { upc: "083900000187", product: "Lagunitas IPA", category: "alcohol", size: "12 fl oz", weight: 0.75, calories: 180, price: 3.29 },
+      { upc: "012345679029", product: "AM/PM Onion Rings", category: "hot_foods", size: "4 oz", weight: 0.25, calories: 270, price: 2.79 },
+      { upc: "049000000502", product: "Canada Dry Ginger Ale", category: "beverages", size: "12 fl oz", weight: 0.75, calories: 140, price: 1.99 },
+      { upc: "040000000408", product: "3 Musketeers", category: "candy", size: "1.92 oz", weight: 0.12, calories: 240, price: 1.59 },
+      { upc: "042000000207", product: "Pall Mall Blue", category: "cigarettes", size: "20 pack", weight: 0.05, calories: 0, price: 7.99 },
+      { upc: "073930000115", product: "Smirnoff Ice", category: "alcohol", size: "11.2 fl oz", weight: 0.70, calories: 228, price: 2.89 },
+      { upc: "012345679036", product: "AM/PM French Fries", category: "hot_foods", size: "5 oz", weight: 0.31, calories: 310, price: 2.49 },
+      { upc: "012000001413", product: "Starbucks Frappuccino", category: "beverages", size: "13.7 fl oz", weight: 0.86, calories: 200, price: 3.49 },
+      { upc: "034000000502", product: "Nerds Rope", category: "candy", size: "0.92 oz", weight: 0.06, calories: 110, price: 1.29 },
+      { upc: "042000000214", product: "American Spirit Blue", category: "cigarettes", size: "20 pack", weight: 0.05, calories: 0, price: 9.79 },
+      { upc: "083900000194", product: "Fireball Cinnamon Whisky", category: "alcohol", size: "50 ml", weight: 0.11, calories: 108, price: 1.99 },
+      { upc: "012345679043", product: "AM/PM Quesadilla", category: "hot_foods", size: "6 oz", weight: 0.38, calories: 360, price: 3.29 }
+    ]
+  }
+
+  @OBSERVABILITY {
+    prometheus: {
+      metrics: ["safety_incident_rate", "telemetry_discrepancy_rate", "delivery_safety_compliance", "transportation_safety_compliance", "verifone_uptime"],
+      scrape_interval: "2s",
+      alerting: "enabled"
+    },
+    grafana: {
+      dashboards: ["am_pm_safety_metrics_v6", "veeder_root_safety", "fuel_delivery_safety", "transportation_safety"],
+      theme: "dark",
+      alerting: "slack_email_integration"
+    },
+    loki: {
+      logs: ["veeder_root_safety", "fuel_deliveries_safety", "transportation_safety", "verifone_safety"],
+      retention: "360d",
+      search: "full_text_and_tags"
+    }
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 cigarette_management_api_hacks.alnplai
 @SCRIPT cigarette_management_api_hacks {
   @Metadata {
