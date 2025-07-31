@@ -1,3 +1,768 @@
+@SCRIPT ampm_coremark_cigarette_automation_v3.0.0 {
+  @CONFIG {
+    system_id: "AMPM_COREMARK_CIG_AUTO_V3.0.0",
+    session_key: "ampm_coremark_session:{user_id}",
+    terminal_id: "AMPM_POS_CIG_TX_42446",
+    virtual_fs: "/alien-vfs/ampm_coremark_cig_v3/",
+    compliance: ["PCI-DSS", "GDPR", "SOC2", "ISO-8583", "FDA_21_CFR_1143.5", "ARS_Title_4"],
+    coremark_api: "https://api.coremark.com/v3.2",
+    ampm_api: "https://api.ampm.com/v2.1",
+    postgresql_url: "postgresql://cluster.ampm_coremark:5432/cig_db",
+    redis_url: "redis://cluster.ampm_coremark:6379",
+    kafka_url: "kafka://cluster.ampm_coremark:9092",
+    milvus_url: "milvus://cluster.ampm_coremark:19530",
+    blockchain_endpoints: {
+      pos_ledger: "https://ledger.apocalittz.io/v3",
+      ethereum: "https://mainnet.infura.io/v3/${INFURA_KEY}"
+    },
+    upc_lookup_endpoints: [
+      "https://www.gs1us.org/tools/gs1-company-database-gepir",
+      "https://api.coremark.com/v3.2/upc",
+      "https://www.barcodelookup.com/api",
+      "https://www.upcitemdb.com/api",
+      "https://api.upcdatabase.org/v1"
+    ],
+    observability: {
+      prometheus: { scrape_interval: "3s", metrics: ["cig_order_accuracy", "price_update_latency", "inventory_sync_rate"] },
+      grafana: { dashboards: ["ampm_cig_metrics_v3.0", "coremark_order_activity"] },
+      loki: { retention: "120d", tags: ["cigarettes", "compliance", "orders"] }
+    },
+    docker: {
+      volume: "ampm_coremark_cig_volume",
+      path: "/var/lib/docker/volumes/ampm_coremark_cig_volume",
+      image: "ampm_coremark_cig_image:latest"
+    },
+    tax_config: {
+      az_tobacco_tax: 0.18, // $0.18 per cigarette per ARS Title 42-3251
+      federal_tax: 1.01,    // $1.01 per pack of 20 per FDA
+      markup_threshold: 0.40 // 40% markup for PLU not found
+    }
+  }
+
+  @INIT {
+    @CONNECT redis { url: config.redis_url, auth: "jwt", ttl: "12h" }
+    @CONNECT postgresql { url: config.postgresql_url, extensions: ["pgvector", "timescaledb"] }
+    @CONNECT kafka { url: config.kafka_url, partitions: 12 }
+    @CONNECT milvus { url: config.milvus_url, version: "2.3" }
+    @CONNECT blockchain { url: config.blockchain_endpoints.pos_ledger }
+    @CREATE volume { name: config.docker.volume, path: config.docker.path }
+    @SETUP validator {
+      tool: "CoremarkCigValidator_V3.0",
+      config: {
+        upc_regex: "^\\d{12,13}$",
+        formats: ["UPC-A", "EAN-13"],
+        compliance: config.compliance,
+        check_digit: "GS1_UPC_CHECK_DIGIT",
+        tax_compliance: "ARS_Title_4_FDA_21_CFR_1143.5"
+      }
+    }
+    @CREATE table IN postgresql {
+      query: "
+        CREATE TABLE IF NOT EXISTS cigarette_catalog (
+          item_id SERIAL PRIMARY KEY,
+          upc_code VARCHAR(13) NOT NULL,
+          product_name VARCHAR(100) NOT NULL,
+          brand VARCHAR(50) NOT NULL,
+          pack_size INT NOT NULL,
+          weight_oz DECIMAL(5,2) NOT NULL,
+          price DECIMAL(10,2) NOT NULL,
+          stock_qty INT NOT NULL,
+          vendor VARCHAR(50) NOT NULL,
+          az_tax DECIMAL(10,2) NOT NULL,
+          federal_tax DECIMAL(10,2) NOT NULL,
+          last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          metadata JSONB,
+          UNIQUE(upc_code)
+        );
+        CREATE TABLE IF NOT EXISTS cigarette_orders (
+          order_id VARCHAR(50) PRIMARY KEY,
+          upc_code VARCHAR(13) NOT NULL,
+          quantity INT NOT NULL,
+          retailer VARCHAR(50) NOT NULL,
+          vendor VARCHAR(50) NOT NULL,
+          status VARCHAR(20) NOT NULL,
+          tax_total DECIMAL(10,2) NOT NULL,
+          timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS cigarette_transactions (
+          transaction_id VARCHAR(66) PRIMARY KEY,
+          retailer VARCHAR(50) NOT NULL,
+          operation VARCHAR(50) NOT NULL,
+          upc_codes JSONB,
+          timestamp TIMESTAMP NOT NULL,
+          quantum_sig VARCHAR(128) NOT NULL
+        );
+      "
+    }
+    @SYNC upc_data {
+      endpoints: config.upc_lookup_endpoints,
+      interval: "15m",
+      cache: redis,
+      key: "cig_upc_sync:{timestamp}",
+      validation: "GS1_VERIFIED",
+      coremark_fallback: config.coremark_api
+    }
+    @MONITOR coremark_scanner {
+      endpoints: ["https://api.coremark.com/v3.2/scanner"],
+      metrics: ["scan_success_rate", "unregistered_upc_rate"],
+      alert_threshold: { unregistered_upc_rate: 0.02 }
+    }
+  }
+
+  @ACTION autonomous_cigarette_management {
+    @INPUT {
+      retailer: string DEFAULT "AMPM",
+      operation_type: string IN ["ingest_cigarettes", "price_update", "order_cigarettes", "validate_inventory"],
+      upc_codes: list<string> OPTIONAL,
+      threshold_config: map<string, any> OPTIONAL
+    }
+    @EXEC {
+      @VALIDATE inputs {
+        @CHECK retailer == "AMPM"
+        @CHECK operation_type IN ["ingest_cigarettes", "price_update", "order_cigarettes", "validate_inventory"]
+      }
+      @SET timestamp = NOW()
+      @SET tx_hash = SHA3-256(upc_codes + operation_type + timestamp)
+      @SET quantum_sig = SHA3-512(tx_hash + config.terminal_id)
+
+      @IF operation_type == "ingest_cigarettes" {
+        @FOR_EACH upc_code IN upc_codes {
+          @VALIDATE upc_code MATCHES config.validator.upc_regex
+          @SET item_data = CALL coremark_api.query_upc(upc_code) OR CALL upc_lookup_api.query(upc_code)
+          @CHECK item_data.brand IN ["Marlboro", "Newport", "Camel", "Winston", "Swisher Sweets"]
+          @SET price = item_data.price OR CALL pricing_model.predict(item_data, config.tax_config)
+          @SET az_tax = config.tax_config.az_tobacco_tax * item_data.pack_size
+          @SET federal_tax = config.tax_config.federal_tax
+          @SET stock_qty = CALL inventory_sync.initial_stock(retailer, upc_code)
+          @RUN sql IN postgresql {
+            query: "
+              INSERT INTO cigarette_catalog (upc_code, product_name, brand, pack_size, weight_oz, price, stock_qty, vendor, az_tax, federal_tax, metadata)
+              VALUES ('{upc_code}', '{item_data.name}', '{item_data.brand}', {item_data.pack_size}, {item_data.weight_oz}, {price}, {stock_qty}, '{item_data.vendor}', {az_tax}, {federal_tax}, '{item_data.metadata}')
+              ON CONFLICT (upc_code) DO UPDATE
+              SET price = {price}, stock_qty = {stock_qty}, last_updated = CURRENT_TIMESTAMP;
+            "
+          }
+          @CACHE item_data IN redis { key: "cig_upc:{upc_code}", ttl: "12h" }
+          @LOG ingestion TO kafka { topic: "cigarette_ingestion", details: "Ingested {upc_code} for {retailer}" }
+        }
+      } @ELSE_IF operation_type == "price_update" {
+        @FOR_EACH upc_code IN upc_codes {
+          @SET coremark_price = CALL coremark_api.get_price(upc_code)
+          @SET market_price = CALL upc_lookup_api.get_price(upc_code)
+          @SET final_price = CALL pricing_model.optimize(coremark_price, market_price, config.tax_config)
+          @CHECK final_price > (coremark_price * (1 + config.tax_config.markup_threshold))
+          @RUN sql IN postgresql {
+            query: "
+              UPDATE cigarette_catalog
+              SET price = {final_price}, last_updated = CURRENT_TIMESTAMP
+              WHERE upc_code = '{upc_code}';
+            "
+          }
+          @LOG price_update TO kafka { topic: "cigarette_price_updates", details: "Updated price for {upc_code} to ${final_price}" }
+        }
+      } @ELSE_IF operation_type == "order_cigarettes" {
+        @SET inventory_data = CALL inventory_sync.get_all(retailer, "cigarette_catalog")
+        @FOR_EACH item IN inventory_data {
+          @CHECK item.stock_qty < threshold_config.min_stock OR item.order_due
+          @SET order_qty = threshold_config.restock_qty - item.stock_qty
+          @SET order_id = SHA3-256(item.upc_code + timestamp)
+          @SET tax_total = (config.tax_config.az_tobacco_tax * item.pack_size + config.tax_config.federal_tax) * order_qty
+          @RUN coremark_api.place_order {
+            upc_code: item.upc_code,
+            quantity: order_qty,
+            retailer: retailer,
+            order_id: order_id
+          }
+          @RUN sql IN postgresql {
+            query: "
+              INSERT INTO cigarette_orders (order_id, upc_code, quantity, retailer, vendor, status, tax_total, timestamp)
+              VALUES ('{order_id}', '{item.upc_code}', {order_qty}, '{retailer}', '{item.vendor}', 'pending', {tax_total}, '{timestamp}');
+            "
+          }
+          @LOG order TO kafka { topic: "cigarette_orders", details: "Placed order {order_id} for {item.upc_code}" }
+        }
+      } @ELSE_IF operation_type == "validate_inventory" {
+        @SET scanner_data = CALL coremark_api.get_scanner_data(retailer)
+        @SET db_data = CALL postgresql.query("SELECT upc_code, stock_qty FROM cigarette_catalog")
+        @FOR_EACH item IN scanner_data {
+          @CHECK item.upc_code IN db_data.upc_codes ELSE {
+            @SET fallback_data = CALL upc_lookup_api.query(item.upc_code)
+            @RUN sql IN postgresql {
+              query: "
+                INSERT INTO cigarette_catalog (upc_code, product_name, brand, pack_size, weight_oz, price, stock_qty, vendor, az_tax, federal_tax, metadata)
+                VALUES ('{item.upc_code}', '{fallback_data.name}', '{fallback_data.brand}', {fallback_data.pack_size}, {fallback_data.weight_oz}, {fallback_data.price}, {item.stock_qty}, '{fallback_data.vendor}', {config.tax_config.az_tobacco_tax * fallback_data.pack_size}, {config.tax_config.federal_tax}, '{fallback_data.metadata}')
+                ON CONFLICT (upc_code) DO UPDATE
+                SET stock_qty = {item.stock_qty}, last_updated = CURRENT_TIMESTAMP;
+              "
+            }
+            @LOG discrepancy TO kafka { topic: "cigarette_discrepancies", details: "Unregistered UPC {item.upc_code} added" }
+          }
+          @CHECK item.stock_qty == db_data[item.upc_code].stock_qty ELSE {
+            @RUN sql IN postgresql {
+              query: "
+                UPDATE cigarette_catalog
+                SET stock_qty = {item.stock_qty}, last_updated = CURRENT_TIMESTAMP
+                WHERE upc_code = '{item.upc_code}';
+              "
+            }
+            @LOG sync TO kafka { topic: "cigarette_inventory_sync", details: "Synced stock for {item.upc_code}" }
+          }
+        }
+      }
+
+      @SAVE transaction TO postgresql {
+        table: "cigarette_transactions",
+        data: {
+          transaction_id: tx_hash,
+          retailer: retailer,
+          operation: operation_type,
+          upc_codes: upc_codes,
+          timestamp: timestamp,
+          quantum_sig: quantum_sig
+        },
+        encryption: "AES-256"
+      }
+
+      @VERIFY transaction ON blockchain {
+        endpoint: config.blockchain_endpoints.pos_ledger,
+        tx_hash: tx_hash,
+        quantum_sig: quantum_sig
+      }
+
+      @RENDER tikz {
+        code: "
+          \\begin{tikzpicture}
+            \\filldraw[color=txborder!80, fill=txbg!20] (0,0) rectangle (6,4);
+            \\node at (3,2) {AMPM Cigarette Transaction: {tx_hash}};
+            \\node at (1.2,3) {Retailer: {retailer}};
+            \\node at (1.2,1) {Operation: {operation_type}};
+          \\end{tikzpicture}
+        "
+      }
+
+      @RETURN {
+        status: "success",
+        message: "Processed cigarette {operation_type} for {retailer}",
+        tx_hash: tx_hash,
+        quantum_sig: quantum_sig,
+        outputs: {
+          processed_count: upc_codes.length,
+          order_status: @IF(operation_type == "order_cigarettes", "placed", "n/a"),
+          validation_status: @IF(operation_type == "validate_inventory", "synced", "n/a")
+        }
+      }
+    }
+  }
+
+  @ACTION handle_scanner_errors {
+    @INPUT {
+      retailer: string DEFAULT "AMPM",
+      scanner_data: map<string, any>,
+      error_type: string IN ["unregistered_upc", "mispick", "connection_failure"]
+    }
+    @EXEC {
+      @SET timestamp = NOW()
+      @SET error_id = SHA3-256(scanner_data + error_type + timestamp)
+      @IF error_type == "unregistered_upc" {
+        @SET fallback_data = CALL upc_lookup_api.query(scanner_data.upc_code)
+        @RUN sql IN postgresql {
+          query: "
+            INSERT INTO cigarette_catalog (upc_code, product_name, brand, pack_size, weight_oz, price, stock_qty, vendor, az_tax, federal_tax, metadata)
+            VALUES ('{scanner_data.upc_code}', '{fallback_data.name}', '{fallback_data.brand}', {fallback_data.pack_size}, {fallback_data.weight_oz}, {fallback_data.price}, {scanner_data.stock_qty}, '{fallback_data.vendor}', {config.tax_config.az_tobacco_tax * fallback_data.pack_size}, {config.tax_config.federal_tax}, '{fallback_data.metadata}')
+            ON CONFLICT (upc_code) DO UPDATE
+            SET stock_qty = {scanner_data.stock_qty}, last_updated = CURRENT_TIMESTAMP;
+          "
+        }
+        @LOG error TO kafka { topic: "scanner_errors", details: "Resolved unregistered UPC {scanner_data.upc_code}" }
+      } @ELSE_IF error_type == "mispick" {
+        @SET correct_item = CALL milvus.search_vector(scanner_data.upc_code, "cigarette_catalog")
+        @RUN coremark_api.correct_order {
+          order_id: scanner_data.order_id,
+          upc_code: correct_item.upc_code
+        }
+        @LOG error TO kafka { topic: "scanner_errors", details: "Corrected mispick for order {scanner_data.order_id}" }
+      } @ELSE_IF error_type == "connection_failure" {
+        @RETRY coremark_api.connect { attempts: 3, delay: 5000ms }
+        @LOG error TO kafka { topic: "scanner_errors", details: "Retried connection for scanner {scanner_data.device_id}" }
+      }
+      @ALERT error TO slack {
+        channel: "#ampm_coremark_alerts",
+        message: "Scanner error {error_type} detected: {error_id}"
+      }
+      @RETURN { status: "resolved", error_id: error_id }
+    }
+  }
+
+  @ACTION dynamic_syntax_evolver {
+    @INPUT {
+      original_input: string,
+      operation_type: string IN ["ingest_cigarettes", "price_update", "order_cigarettes", "validate_inventory"]
+    }
+    @EXEC {
+      @SET timestamp = NOW()
+      @SET input_hash = SHA3-256(original_input + operation_type + timestamp)
+      @SET command_name = "CIG_AUTO_${operation_type}_${input_hash}"
+      @SET quantum_sig = SHA3-512(command_name + timestamp)
+      @GENERATE new_syntax {
+        command_name: command_name,
+        code: "
+          COMMAND ${command_name} {
+            ORIGINAL_INPUT: \"${original_input:0:32}...\"
+            EXECUTION: {
+              CALL AMPM_COREMARK_SYSTEM.PROCESS(
+                input: \"${original_input}\",
+                operation: \"${operation_type}\",
+                qsig: \"${quantum_sig}\",
+                validation: \"GS1_UPC_CHECK_DIGIT\"
+              )
+              OUTPUT: {
+                syntax_version: \"6.0.0-quantum\",
+                validation: CALL BLOCKCHAIN.VERIFY(\"${quantum_sig}\"),
+                tax_status: CALL TAX_ENGINE.VERIFY(\"${original_input}\")
+              }
+            }
+          }
+        "
+      }
+      @RUN sql IN postgresql {
+        query: "
+          INSERT INTO aln_syntax_logs (command_name, original_input, quantum_sig, timestamp)
+          VALUES ('{command_name}', '{original_input}', '{quantum_sig}', '{timestamp}');
+        "
+      }
+      @LOG syntax_evolution TO kafka { topic: "syntax_evolution", details: "Evolved syntax for {operation_type}" }
+      @RETURN { status: "evolved", command_name: command_name }
+    }
+  }
+}
+
+@MERCHANDISE>AMPM>Cigarettes {
+  @ITEMS [
+    {
+      branch: "dep.branch75.AMPM.cigarettes.subcat.regular",
+      upc: "071707001112",
+      product: "Marlboro Gold (20 pack)",
+      brand: "Marlboro",
+      pack_size: 20,
+      weight_oz: 1.1,
+      price: 7.59,
+      az_tax: 3.60,
+      federal_tax: 1.01,
+      stock: 60,
+      vendor: "Philip Morris",
+      validation: "GS1 Verified"
+    },
+    {
+      branch: "dep.branch76.AMPM.cigarettes.subcat.regular",
+      upc: "070200001013",
+      product: "Newport Menthol (20 pack)",
+      brand: "Newport",
+      pack_size: 20,
+      weight_oz: 1.1,
+      price: 7.79,
+      az_tax: 3.60,
+      federal_tax: 1.01,
+      stock: 55,
+      vendor: "R.J. Reynolds",
+      validation: "Coremark API"
+    },
+    {
+      branch: "dep.branch77.AMPM.cigarettes.subcat.regular",
+      upc: "071707001129",
+      product: "Marlboro Silver (20 pack)",
+      brand: "Marlboro",
+      pack_size: 20,
+      weight_oz: 1.1,
+      price: 7.49,
+      az_tax: 3.60,
+      federal_tax: 1.01,
+      stock: 50,
+      vendor: "Philip Morris",
+      validation: "BarcodeLookup"
+    },
+    {
+      branch: "dep.branch78.AMPM.cigarettes.subcat.regular",
+      upc: "042000001019",
+      product: "Camel Blue (20 pack)",
+      brand: "Camel",
+      pack_size: 20,
+      weight_oz: 1.1,
+      price: 7.29,
+      az_tax: 3.60,
+      federal_tax: 1.01,
+      stock: 45,
+      vendor: "R.J. Reynolds",
+      validation: "UPCitemdb"
+    },
+    {
+      branch: "dep.branch79.AMPM.cigarettes.subcat.regular",
+      upc: "071707001136",
+      product: "Marlboro Black (20 pack)",
+      brand: "Marlboro",
+      pack_size: 20,
+      weight_oz: 1.1,
+      price: 7.69,
+      az_tax: 3.60,
+      federal_tax: 1.01,
+      stock: 40,
+      vendor: "Philip Morris",
+      validation: "GS1 Verified"
+    },
+    {
+      branch: "dep.branch80.AMPM.cigarettes.subcat.regular",
+      upc: "070200001020",
+      product: "Newport Non-Menthol (20 pack)",
+      brand: "Newport",
+      pack_size: 20,
+      weight_oz: 1.1,
+      price: 7.59,
+      az_tax: 3.60,
+      federal_tax: 1.01,
+      stock: 50,
+      vendor: "R.J. Reynolds",
+      validation: "Coremark API"
+    },
+    {
+      branch: "dep.branch81.AMPM.cigarettes.subcat.regular",
+      upc: "042000001026",
+      product: "Camel Turkish Gold (20 pack)",
+      brand: "Camel",
+      pack_size: 20,
+      weight_oz: 1.1,
+      price: 7.39,
+      az_tax: 3.60,
+      federal_tax: 1.01,
+      stock: 35,
+      vendor: "R.J. Reynolds",
+      validation: "BarcodeLookup"
+    },
+    {
+      branch: "dep.branch82.AMPM.cigarettes.subcat.regular",
+      upc: "071707001143",
+      product: "Marlboro Menthol (20 pack)",
+      brand: "Marlboro",
+      pack_size: 20,
+      weight_oz: 1.1,
+      price: 7.79,
+      az_tax: 3.60,
+      federal_tax: 1.01,
+      stock: 60,
+      vendor: "Philip Morris",
+      validation: "UPCitemdb"
+    },
+    {
+      branch: "dep.branch83.AMPM.cigarettes.subcat.regular",
+      upc: "083900001014",
+      product: "Winston Red (20 pack)",
+      brand: "Winston",
+      pack_size: 20,
+      weight_oz: 1.1,
+      price: 6.99,
+      az_tax: 3.60,
+      federal_tax: 1.01,
+      stock: 40,
+      vendor: "ITG Brands",
+      validation: "GS1 Verified"
+    },
+    {
+      branch: "dep.branch84.AMPM.cigarettes.subcat.regular",
+      upc: "070200001037",
+      product: "Newport Platinum (20 pack)",
+      brand: "Newport",
+      pack_size: 20,
+      weight_oz: 1.1,
+      price: 7.89,
+      az_tax: 3.60,
+      federal_tax: 1.01,
+      stock: 45,
+      vendor: "R.J. Reynolds",
+      validation: "Coremark API"
+    },
+    {
+      branch: "dep.branch85.AMPM.cigarettes.subcat.regular",
+      upc: "042000001033",
+      product: "Camel Crush (20 pack)",
+      brand: "Camel",
+      pack_size: 20,
+      weight_oz: 1.1,
+      price: 7.49,
+      az_tax: 3.60,
+      federal_tax: 1.01,
+      stock: 50,
+      vendor: "R.J. Reynolds",
+      validation: "BarcodeLookup"
+    },
+    {
+      branch: "dep.branch86.AMPM.cigarettes.subcat.regular",
+      upc: "071707001150",
+      product: "Marlboro Smooth (20 pack)",
+      brand: "Marlboro",
+      pack_size: 20,
+      weight_oz: 1.1,
+      price: 7.59,
+      az_tax: 3.60,
+      federal_tax: 1.01,
+      stock: 55,
+      vendor: "Philip Morris",
+      validation: "UPCitemdb"
+    },
+    {
+      branch: "dep.branch87.AMPM.cigarettes.subcat.regular",
+      upc: "083900001021",
+      product: "Winston White (20 pack)",
+      brand: "Winston",
+      pack_size: 20,
+      weight_oz: 1.1,
+      price: 6.89,
+      az_tax: 3.60,
+      federal_tax: 1.01,
+      stock: 35,
+      vendor: "ITG Brands",
+      validation: "GS1 Verified"
+    },
+    {
+      branch: "dep.branch88.AMPM.cigarettes.subcat.regular",
+      upc: "070200001044",
+      product: "Newport Menthol Gold (20 pack)",
+      brand: "Newport",
+      pack_size: 20,
+      weight_oz: 1.1,
+      price: 7.69,
+      az_tax: 3.60,
+      federal_tax: 1.01,
+      stock: 50,
+      vendor: "R.J. Reynolds",
+      validation: "Coremark API"
+    },
+    {
+      branch: "dep.branch89.AMPM.cigarettes.subcat.regular",
+      upc: "042000001040",
+      product: "Camel Silver (20 pack)",
+      brand: "Camel",
+      pack_size: 20,
+      weight_oz: 1.1,
+      price: 7.29,
+      az_tax: 3.60,
+      federal_tax: 1.01,
+      stock: 40,
+      vendor: "R.J. Reynolds",
+      validation: "BarcodeLookup"
+    },
+    {
+      branch: "dep.branch90.AMPM.cigarettes.subcat.regular",
+      upc: "071707001167",
+      product: "Marlboro Red Label (20 pack)",
+      brand: "Marlboro",
+      pack_size: 20,
+      weight_oz: 1.1,
+      price: 7.49,
+      az_tax: 3.60,
+      federal_tax: 1.01,
+      stock: 60,
+      vendor: "Philip Morris",
+      validation: "UPCitemdb"
+    },
+    {
+      branch: "dep.branch91.AMPM.cigarettes.subcat.regular",
+      upc: "083900001038",
+      product: "Winston Gold (20 pack)",
+      brand: "Winston",
+      pack_size: 20,
+      weight_oz: 1.1,
+      price: 6.99,
+      az_tax: 3.60,
+      federal_tax: 1.01,
+      stock: 45,
+      vendor: "ITG Brands",
+      validation: "GS1 Verified"
+    },
+    {
+      branch: "dep.branch92.AMPM.cigarettes.subcat.cigars",
+      upc: "071610801159",
+      product: "Swisher Sweets Original (5 pack)",
+      brand: "Swisher Sweets",
+      pack_size: 5,
+      weight_oz: 1.5,
+      price: 4.99,
+      az_tax: 0.90,
+      federal_tax: 0.25,
+      stock: 70,
+      vendor: "Swisher International",
+      validation: "Coremark API"
+    },
+    {
+      branch: "dep.branch93.AMPM.cigarettes.subcat.cigars",
+      upc: "071610801166",
+      product: "Swisher Sweets Grape (5 pack)",
+      brand: "Swisher Sweets",
+      pack_size: 5,
+      weight_oz: 1.5,
+      price: 4.99,
+      az_tax: 0.90,
+      federal_tax: 0.25,
+      stock: 65,
+      vendor: "Swisher International",
+      validation: "BarcodeLookup"
+    },
+    {
+      branch: "dep.branch94.AMPM.cigarettes.subcat.regular",
+      upc: "070200001051",
+      product: "Newport Menthol Blue (20 pack)",
+      brand: "Newport",
+      pack_size: 20,
+      weight_oz: 1.1,
+      price: 7.79,
+      az_tax: 3.60,
+      federal_tax: 1.01,
+      stock: 55,
+      vendor: "R.J. Reynolds",
+      validation: "UPCitemdb"
+    },
+    {
+      branch: "dep.branch95.AMPM.cigarettes.subcat.regular",
+      upc: "042000001057",
+      product: "Camel Turkish Silver (20 pack)",
+      brand: "Camel",
+      pack_size: 20,
+      weight_oz: 1.1,
+      price: 7.39,
+      az_tax: 3.60,
+      federal_tax: 1.01,
+      stock: 40,
+      vendor: "R.J. Reynolds",
+      validation: "GS1 Verified"
+    },
+    {
+      branch: "dep.branch96.AMPM.cigarettes.subcat.regular",
+      upc: "071707001174",
+      product: "Marlboro Virginia Blend (20 pack)",
+      brand: "Marlboro",
+      pack_size: 20,
+      weight_oz: 1.1,
+      price: 7.69,
+      az_tax: 3.60,
+      federal_tax: 1.01,
+      stock: 50,
+      vendor: "Philip Morris",
+      validation: "Coremark API"
+    },
+    {
+      branch: "dep.branch97.AMPM.cigarettes.subcat.regular",
+      upc: "083900001045",
+      product: "Winston Silver (20 pack)",
+      brand: "Winston",
+      pack_size: 20,
+      weight_oz: 1.1,
+      price: 6.89,
+      az_tax: 3.60,
+      federal_tax: 1.01,
+      stock: 35,
+      vendor: "ITG Brands",
+      validation: "BarcodeLookup"
+    },
+    {
+      branch: "dep.branch98.AMPM.cigarettes.subcat.cigars",
+      upc: "071610801173",
+      product: "Swisher Sweets Sweet Cream (5 pack)",
+      brand: "Swisher Sweets",
+      pack_size: 5,
+      weight_oz: 1.5,
+      price: 4.99,
+      az_tax: 0.90,
+      federal_tax: 0.25,
+      stock: 60,
+      vendor: "Swisher International",
+      validation: "UPCitemdb"
+    },
+    {
+      branch: "dep.branch99.AMPM.cigarettes.subcat.regular",
+      upc: "070200001068",
+      product: "Newport Menthol Silver (20 pack)",
+      brand: "Newport",
+      pack_size: 20,
+      weight_oz: 1.1,
+      price: 7.69,
+      az_tax: 3.60,
+      federal_tax: 1.01,
+      stock: 45,
+      vendor: "R.J. Reynolds",
+      validation: "GS1 Verified"
+    }
+  ]
+}
+
+@System>Function>Call>ALN_Chatbot {
+  @Description: "ALN-Chatbot for handling cigarette-related customer queries and compliance"
+  @Version: "1.0.0"
+  @Configuration {
+    bot_id: "aln_chatbot_cig",
+    rag_model: "all-MiniLM-L12-v2",
+    vector_db: "milvus",
+    endpoints: {
+      query: "/api/v1/chat/cig_query",
+      feedback: "/api/v1/chat/cig_feedback"
+    }
+  }
+  @ACTION handle_cigarette_query {
+    @INPUT {
+      user_id: string,
+      query_text: string,
+      context: map<string, any>
+    }
+    @EXEC {
+      @INJECT rag {
+        model: config.rag_model,
+        context: ["query: {query_text}", "user: {user_id}", "metadata: {context}", "compliance: FDA_21_CFR_1143.5"],
+        vector_db: config.vector_db,
+        top_k: 15
+      }
+      @SET response = CALL ALN_Chatbot.generate_response(query_text, rag_output)
+      @CHECK compliance IN rag_output FOR "age_verification" IF context.category == "cigarettes" {
+        @RUN sql IN postgresql {
+          query: "
+            INSERT INTO id_scans (user_id, id_data, is_valid, restricted_category, timestamp)
+            VALUES ('{user_id}', '{context.id_data}', {context.id_valid}, 'cigarettes', CURRENT_TIMESTAMP);
+          "
+        }
+      }
+      @RUN sql IN postgresql {
+        query: "
+          INSERT INTO conversation_flows (bot_id, user_id, intents, responses, platform, timestamp)
+          VALUES ('{config.bot_id}', '{user_id}', '{rag_output.intents}', '{response}', 'web', CURRENT_TIMESTAMP);
+        "
+      }
+      @LOG query TO kafka { topic: "cigarette_chat_interactions", details: "Cigarette query processed for {user_id}" }
+      @RETURN { status: "responded", response: response }
+    }
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 @SCRIPT aln_am_pm_veeder_root_integration_v5 {
   @CONFIG {
     session_key: "aln_am_pm_veeder_root_session_v5:{user_id}",
