@@ -1,0 +1,30 @@
+ALN_DEFINE_FUNC_0010_DEEDBEEF_MultiPromptHandler {
+    # Handles transaction phases with prompt sequencing in detected language
+
+    supported_languages = ["english", "spanish", "french", "german"]
+
+    transaction_phases = [
+        "prompt.insert_card",
+        "prompt.enter_pin",
+        "prompt.select_account"
+    ]
+
+    # Display all prompts for the customer's language sequentially
+    display_prompts_for_language = func(lang_code: string) {
+        for prompt_key in transaction_phases do
+            prompt_text = ALN_DEFINE_FUNC_0010_DEEDBEEF_TranslationManager.get_prompt_text(prompt_key, lang_code)
+            display_prompt(prompt_text)
+            wait_for_user_input()  # Simulate customer interaction
+        end
+    }
+
+    # Detect language and kick off prompt sequence; fallback to English when needed
+    detect_and_display = func(customer_lang: string) {
+        lang = customer_lang.lower()
+        if lang in supported_languages then
+            display_prompts_for_language(lang)
+        else
+            display_prompts_for_language("english")
+        end
+    }
+}
