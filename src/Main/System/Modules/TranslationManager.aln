@@ -1,0 +1,39 @@
+ALN_DEFINE_FUNC_0010_DEEDBEEF_TranslationManager {
+    # Dynamic prompt translation resources supporting multiple languages.
+    # English fallback with parenthesized English for employee clarity.
+
+    translations = {
+        "prompt.insert_card": {
+            "english": "Please insert your card",
+            "spanish": "Por favor, inserte su tarjeta (Please insert your card)",
+            "french": "Veuillez insérer votre carte (Please insert your card)",
+            "german": "Bitte stecken Sie Ihre Karte ein (Please insert your card)"
+        },
+        "prompt.enter_pin": {
+            "english": "Please enter your PIN",
+            "spanish": "Por favor, ingrese su PIN (Please enter your PIN)",
+            "french": "Veuillez saisir votre code PIN (Please enter your PIN)",
+            "german": "Bitte geben Sie Ihre PIN ein (Please enter your PIN)"
+        },
+        "prompt.select_account": {
+            "english": "Please select account type",
+            "spanish": "Por favor seleccione el tipo de cuenta (Please select account type)",
+            "french": "Veuillez sélectionner le type de compte (Please select account type)",
+            "german": "Bitte wählen Sie den Kontotyp (Please select account type)"
+        }
+    }
+
+    # Retrieve prompt text by key and customer language, fallback to English
+    get_prompt_text = func(prompt_key: string, lang_code: string) -> string {
+        if prompt_key in translations then
+            lang_map = translations[prompt_key]
+            if lang_code in lang_map then
+                return lang_map[lang_code]
+            else
+                return lang_map["english"]
+            end
+        else
+            return "[Missing translation for " + prompt_key + "]"
+        end
+    }
+}
