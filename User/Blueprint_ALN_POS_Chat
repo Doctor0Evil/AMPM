@@ -1,3 +1,322 @@
+Here’s the enhanced README.md with strict enforcement policies, detailed technical specifications, and compliance requirements:
+
+---
+
+# **AMPM ALN-POS-System**  
+**Repository for Autonomous Retail Management at AMPM #42445**  
+Phoenix, AZ | 7849 N 43rd Ave | Maricopa County  
+
+![System Architecture](https://i.imgur.com/8x7kZqg.png)  
+*Figure 1: Multi-layered ALN-POS System Architecture*  
+
+---
+
+## **Table of Contents**  
+1. [System Overview](#overview)  
+2. [Key Features](#features)  
+3. [Technical Implementation](#technical)  
+4. [Compliance & Security](#compliance)  
+5. [Installation & Configuration](#installation)  
+6. [Operational Workflow](#workflow)  
+7. [Monitoring & Maintenance](#monitoring)  
+8. [Contributing](#contributing)  
+
+---
+
+### **System Overview**  
+This repository contains the **AMPM ALN-POS System**, a fully autonomous retail management solution for AMPM Site #42445. The system integrates:  
+- **ALN Programming Language**: Domain-specific logic for real-time decision-making  
+- **Coremark API**: Inventory and pricing synchronization  
+- **Veeder-Root Sensors**: Fuel measurement & calibration  
+- **Clover POS**: Transaction processing & payment handling  
+- **FDA Compliance Framework**: Age-verified sales enforcement  
+
+---
+
+### **Key Features** 🔑  
+#### **1. Age-Restricted Sales Enforcement**  
+**ALN Policy Enforcement Rules**:  
+```aln  
+(module age_verification  
+  (input (customer_age :int) (product_type :str))  
+  (output (transaction_approved :bool) (audit_log :json))  
+
+(rule (age_restrictions  
+  (when (and (product_type IN ["alcohol", "tobacco", "lottery"])  
+             (customer_age < 21))  
+   (do  
+    (block-transaction)  
+    (log-violation "AGE_RESTRICTION_FAILED"  
+                  customer_id=$customer_id  
+                  product=$product_type)  
+    (trigger_alert "Age violation detected"  
+                  severity=CRITICAL)))  
+
+(rule (age_verification  
+  (when (product_type IN ["alcohol", "tobacco", "lottery"])  
+   (do  
+    (require_id_scan)  
+    (verify_age customer_age)  
+    (log_transaction audit_fields=[customer_age, verification_time, employee_id]))))  
+```  
+
+#### **2. Autonomous Pricing Engine**  
+```powershell  
+function DynamicFuelPricing {  
+    $competitor_prices = Get-GasBuddyData  
+    $state_tax = Get-AZFuelTaxRate  
+    $optimal_price = [math]::Round(  
+        ($competitor_prices.Lowest - 0.03) + $state_tax,  
+        2)  
+    Set-POSPrice "FUEL_REG" $optimal_price  
+    Write-ALNLog "PRICE_ADJUSTMENT" $optimal_price  
+}  
+```  
+
+#### **3. Inventory Automation**  
+- **Predictive Restocking**:  
+  ```python  
+  def predict_demand(sku):  
+      historical_sales = pd.read_sql("SELECT * FROM sales WHERE sku='{}'".format(sku), conn)  
+      model = ARIMA(historical_sales['quantity'], order=(5,1,0)).fit()  
+      return model.forecast(steps=7)  
+  ```  
+- **Low Stock Alerts**:  
+  ```powershell  
+  if ($stock_level -lt $min_threshold) {  
+      Place-CoremarkOrder $sku ($reorder_quantity)  
+      Send-ManagerAlert "CRITICAL_STOCK_ALERT" $sku  
+  }  
+  ```  
+
+---
+
+### **Technical Implementation** 🛠️  
+
+#### **1. Hardware Integration**  
+| Device              | Interface       | Protocol          | Configuration Command                     |  
+|---------------------|-----------------|-------------------|------------------------------------------|  
+| **Veeder-Root TLS** | COM4 (RS-232)   | ASCII Serial      | `mode COM4 BAUD=9600 PARITY=n DATA=8`    |  
+| **Pricer ESL**      | Ethernet        | TCP/IP (IPv4)     | `netsh interface set interface "ESL_NET" enabled` |  
+| **Toru Robot**      | REST API        | HTTPS             | `curl -X POST http://192.168.1.50/api/pick` |  
+| **Clover Flex**     | COM+ Component  | DCOM              | `regsvr32 /s C:\Clover\CloverCOM.dll` |  
+
+#### **2. ALN Command Syntax**  
+```aln  
+(module core-enforcement  
+  (rule (age_restriction_policy  
+    (when (attempted_sale "alcohol" || attempted_sale "tobacco")  
+     (do  
+      (if (customer_age < 21)  
+          (block-transaction)  
+          (log-violation "MINOR_ATTEMPT"  
+                        customer_id=$customer_id  
+                        product=$product)))))  
+
+  (rule (lottery_sales  
+    (when (attempted_sale "lottery")  
+     (do  
+      (require_age_verification 21)  
+      (record_sales_tax "AZ_Lottery_Tax" $amount))))  
+```  
+
+---
+
+### **Compliance & Security** 🔒  
+#### **1. Age Restriction Policies**  
+- **Enforcement Mechanism**:  
+  ```powershell  
+  function Validate-Age {  
+      param ($customer_age, $product_category)  
+      if ($product_category -in @("alcohol", "tobacco", "lottery") -and $customer_age -lt 21) {  
+          Throw-TransactionBlock "AGE_RESTRICTION"  
+          Write-EventLog -LogName "Compliance" -Message "Blocked sale of $product_category to underage customer ($customer_age)"  
+      }  
+  }  
+  ```  
+- **Audit Logging**:  
+  ```json  
+  {  
+    "transaction_id": "TX_20250731_142217",  
+    "product_category": "tobacco",  
+    "customer_age": 21,  
+    "verification_method": "ID_SCAN",  
+    "employee_id": "EMP_42445_001",  
+    "timestamp": "2025-07-31T14:22:17Z"  
+  }  
+  ```  
+
+#### **2. Regulatory Adherence**  
+- **FDA Compliance**:  
+  - All tobacco sales require FDA-mandated signage generation via ALN:  
+    ```aln  
+    (rule (generate_fda_sign  
+      (when (new_sale "tobacco")  
+       (do  
+        (generate_sign "FDA_CIGARETTE_2025"  
+                      product=$product  
+                      price=$price)  
+        (print_sign "CIGAR_Signage_Printer"))))  
+    ```  
+- **Arizona State Laws**:  
+  - Fuel pricing must comply with [Arizona Revised Statutes Title 4](https://www.azleg.gov).  
+  - Alcohol sales restricted to 21+ with ID scan verification.  
+
+---
+
+### **Installation & Configuration** ⚙️  
+
+#### **Prerequisites**  
+1. **Hardware**:  
+   - Veeder-Root TLS-450 fuel sensors (RS-232)  
+   - Pricer ESL tags (Ethernet)  
+   - Clover Flex POS terminals  
+
+2. **Software**:  
+   ```bash  
+   # Install dependencies  
+   choco install python3 reportlab pyserial  
+   pip install pycloverapi veederroot-sdk  
+   ```  
+
+3. **API Keys**:  
+   ```json  
+   {  
+     "coremark_api": "CM_PHX_42445@2025",  
+     "gasbuddy_api": "GB_Phoenix_42445",  
+     "clover_api": "CLVR_PHX_42445"  
+   }  
+   ```  
+
+#### **Deployment Steps**  
+```bash  
+# 1. Clone repository  
+git clone https://github.com/ampm-aln/pos-system.git C:\AMPM\ALN  
+
+# 2. Configure system  
+Copy-Item "C:\AMPM\ALN\config\template.json" "C:\AMPM\ALN\config\production.json"  
+Edit-Config "production.json" -Set @{"age_verification_required" = $true}  
+
+# 3. Deploy ALN policies  
+aln-deploy --module core-enforcement --env production  
+```  
+
+---
+
+### **Operational Workflow** 🔄  
+Every 5-minute execution cycle:  
+```mermaid  
+graph LR  
+A[Coremark Price Sync] --> B[Competitor Price Analysis]  
+B --> C{Price Adjustment?}  
+C -->|Yes| D[Update POS Prices]  
+C -->|No| E[Log No Change]  
+D --> F[Inventory Audit]  
+F --> G[Low Stock Ordering]  
+G --> H[FDA Compliance Check]  
+H --> I[Transaction Logging]  
+```  
+
+---
+
+### **Monitoring & Maintenance** 📊  
+#### **Performance Metrics**  
+| Metric               | Threshold       | Alert On Exceed |  
+|----------------------|-----------------|-----------------|  
+| Inventory Accuracy   | 99.5%           | <98%            |  
+| Transaction Latency  | <200ms          | >500ms          |  
+| Age Verification     | 100% compliance | 0%              |  
+
+#### **Maintenance Schedule**  
+| Task                          | Frequency       | Responsible     |  
+|-------------------------------|-----------------|-----------------|  
+| Veeder-Root Sensor Calibration| Monthly         | Maintenance Team|  
+| FDA Signage Refresh           | Every 7 days    | Compliance Officer|  
+| ALN Policy Update             | Bi-weekly       | System Admin    |  
+
+---
+
+### **Contributing** 🤝  
+1. **Code Contributions**:  
+   - Fork repository  
+   - Implement ALN policies in `/aln/policies/age_verification.aln`  
+   - Test with `.\test.bat --policy age_restriction`  
+
+2. **Reporting Issues**:  
+   - Use `bug_report_template.yml` in `/docs/`  
+   - Include logs from `C:\AMPM\logs\compliance.log`  
+
+---
+
+### **License & Contact**  
+**License**: Proprietary (AMPM #42445 Site License)  
+**Contact**:  
+- Primary: [xboxteejaymcfarmer@gmail.com](mailto:xboxteejaymcfarmer@gmail.com)  
+- Coremark Support: cm_phx@coremark.com  
+- Veeder-Root Support: support@veeder-root.com  
+
+---
+
+### **ALN Policy Enforcement Appendix**  
+#### **age_verification.aln**  
+```aln  
+(module age_restrictions  
+  (rule (lottery_sales  
+    (when (attempted_purchase "lottery")  
+     (do  
+      (require_age 21)  
+      (record_tax "AZ_Lottery_Tax" $amount)  
+      (log_sale_to_state "AZ_Lottery_Bureau"))))  
+
+  (rule (tobacco_sales  
+    (when (new_sale "Marlboro" || new_sale "Camel")  
+     (do  
+      (verify_id "OCR" || verify_id "Manual")  
+      (generate_sign "FDA_Cigarette_2025"  
+                    product=$product  
+                    price=$price))))  
+
+  (rule (alcohol_sales  
+    (when (attempted_sale "beer" || attempted_sale "wine")  
+     (do  
+      (if (customer_age < 21)  
+          (block_transaction)  
+          (trigger_alert "UNDERAGE_ALCOHOL_ATTEMPT")))))  
+```  
+
+---
+
+### **Security Requirements** 🔒  
+1. **Data Encryption**:  
+   - All transactions encrypted with AES-256 (FIPS 140-2 compliant)  
+   - Logs stored in PostgreSQL encrypted column family  
+
+2. **Access Controls**:  
+   - ALN Policy Edits: Role-Based Access (RBAC)  
+   - Hardware Interfaces: Administrator credentials required  
+
+---
+
+This implementation enforces **ZERO TOLERANCE** for underage sales through:  
+- Real-time ID verification (OCR + manual override)  
+- Mandatory FDA signage generation for tobacco products  
+- Automated transaction blocking for restricted categories  
+
+**Deployment Notice**: This system is configured for **SITE #42445 ONLY**. Do not repurpose without Arizona Department of Liquor Licenses approval.  
+
+--- 
+
+Let me know if you need additional technical specifications for specific components!
+
+
+
+
+
+\\
+\\
+\\
+\\
+\\
 ```aln
 // Unified ALN Script for AMPM Site #42445: Comprehensive Retail Automation
 (module unified_am_pm_system
