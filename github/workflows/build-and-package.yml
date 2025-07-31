@@ -1,0 +1,36 @@
+name: ALN POS Build & Package
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+      - master
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    - name: Set up Bash environment (if needed)
+      run: |
+        sudo apt-get update
+        # Install any dependencies here if your ALN tooling requires
+
+    - name: Make build script executable
+      run: chmod +x ./build_repo.sh
+
+    - name: Run build and organize script
+      run: ./build_repo.sh
+
+    - name: Upload build artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: aln-pos-system-package
+        path: build/aln-pos-system.tar.gz
