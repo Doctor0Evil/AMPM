@@ -1,0 +1,150 @@
+@SCRIPT aln_response_handler {
+    @CONFIG {
+        system_id: "ALN-RESPONSE-HANDLER-V1.0.0",
+        virtual_fs: "/alien-vfs/response/",
+        compliance: ["GDPR", "HIPAA", "SOC2", "PCI-DSS", "ISO27001"],
+        security: {
+            encryption: "AES-256",
+            auth: "JWT",
+            audit_retention: "90d"
+        },
+        services: ["postgresql", "redis", "kafka", "milvus", "prometheus", "grafana", "loki"]
+    }
+
+    @ACTION process_user_request {
+        @INPUT {
+            document_data: map<string, any>,
+            request_type: string IN ["parse_document", "execute_aln", "validate_config"],
+            retailer: string IN ["AMPM", "Walmart", "CircleK", "QuickTrip", "Coremark"]
+        }
+        @EXEC {
+            @VALIDATE inputs {
+                @CHECK document_data NOT NULL
+                @CHECK request_type IN ["parse_document", "execute_aln", "validate_config"]
+                @CHECK retailer IN @CONFIG.retailers
+            }
+            @SET timestamp = NOW()
+            @SET tx_hash = SHA3-256(document_data + timestamp)
+            @SET quantum_sig = SHA3-512(tx_hash + @CONFIG.system_id)
+
+            @IF request_type == "parse_document" {
+                @PARSE document_data {
+                    format: "yaml",
+                    schema: "UnifiedAMPMSystem",
+                    target_tables: [
+                        "pos_transactions",
+                        "quantum_synergy_trades",
+                        "conversation_flows",
+                        "merchandise_catalog",
+                        "promotions",
+                        "compliance_flags",
+                        "delivery_orders",
+                        "security_alerts",
+                        "gpg_commit_logs",
+                        "ci_cd_events",
+                        "kubernetes_operator_logs",
+                        "aln_syntax_logs",
+                        "user_roles",
+                        "id_scans"
+                    ]
+                }
+                @RUN sql IN postgresql {
+                    query: "
+                        INSERT INTO aln_syntax_logs (command_name, original_input, quantum_sig, tx_hash, timestamp)
+                        VALUES ('PARSE_DOCUMENT_${retailer}', '{document_data}', '{quantum_sig}', '{tx_hash}', '{timestamp}');
+                    "
+                }
+                @LOG action TO kafka {
+                    topic: "aln_document_parse",
+                    message: "Parsed document for ${retailer} with tx_hash: ${tx_hash}"
+                }
+            } @ELSE_IF request_type == "execute_aln" {
+                @RUN aln_script {
+                    file: "ALN_MASTER_SYSTEM.INTEGRATION.aln",
+                    env: "prod",
+                    params: {
+                        retailer: @INPUT.retailer,
+                        operation: "full_ecosystem"
+                    }
+                }
+                @MONITOR execution {
+                    metrics: ["execution_time", "resource_usage", "error_rate"],
+                    thresholds: { error_rate: 0.05, execution_time: 5000 }
+                }
+                @LOG action TO kafka {
+                    topic: "aln_execution",
+                    message: "Executed ALN script for ${retailer} with tx_hash: ${tx_hash}"
+                }
+            } @ELSE_IF request_type == "validate_config" {
+                @VALIDATE config {
+                    schema: "UnifiedAMPMSystem",
+                    compliance: @CONFIG.compliance,
+                    security: @CONFIG.security
+                }
+                @CHECK upc_links {
+                    urls: [
+                        "https://upcdatabase.org/search",
+                        "https://www.barcodelookup.com/",
+                        "https://www.upcitemdb.com/"
+                    ],
+                    status: "reachable",
+                    format: "UPC-A or EAN-13"
+                }
+                @LOG action TO kafka {
+                    topic: "aln_validation",
+                    message: "Validated configuration for ${retailer} with tx_hash: ${tx_hash}"
+                }
+            }
+
+            @SAVE transaction TO postgresql {
+                table: "aln_transactions",
+                data: {
+                    transaction_id: tx_hash,
+                    retailer: @INPUT.retailer,
+                    operation: @INPUT.request_type,
+                    timestamp: timestamp
+                },
+                encryption: "AES-256"
+            }
+
+            @RETURN {
+                status: "success",
+                message: "Processed ${request_type} for ${retailer}",
+                tx_hash: tx_hash,
+                quantum_sig: quantum_sig,
+                outputs: {
+                    parsed_tables: @IF(@INPUT.request_type == "parse_document", @PARSE.target_tables, []),
+                    execution_status: @IF(@INPUT.request_type == "execute_aln", "completed", "n/a"),
+                    validation_status: @IF(@INPUT.request_type == "validate_config", "valid", "n/a")
+                }
+            }
+        }
+    }
+
+    @ACTION render_metrics {
+        @INPUT {
+            metric_type: string IN ["transaction_throughput", "chatbot_response_time", "inventory_update_frequency"],
+            time_range: string
+        }
+        @EXEC {
+            @FETCH metrics FROM prometheus {
+                query: "rate(${metric_type}[${time_range}])",
+                endpoint: "http://prometheus:9090"
+            }
+            @RENDER chart {
+                type: "line",
+                data: @FETCH.metrics,
+                labels: ["Time", "${metric_type}"],
+                colors: ["#1f77b4", "#ff7f0e"]
+            }
+            @SAVE chart TO grafana {
+                dashboard: "aln_metrics",
+                panel: "${metric_type}_panel"
+            }
+            @RETURN {
+                status: "success",
+                message: "Rendered ${metric_type} chart for time range ${time_range}"
+            }
+        }
+    }
+}
