@@ -1,0 +1,384 @@
+// Unified ALN Script for AMPM Site #42445 Automation
+// Integrates POS, QuantumSynergyCore, Chatbot, Promotions, AI Security, Inventory, Compliance, Delivery, Hardware
+(module unified-retail-system
+  (input
+    (upc_scans :json)
+    (promotions_data :json)
+    (fuel_prices :json)
+    (chat_queries :json)
+    (google_maps_data :geojson)
+    (inventory_data :json)
+    (coremark_prices :json)
+    (camera_feeds :json)
+    (purchase_attempts :json)
+    (delivery_status :json)
+    (hardware_events :json)
+    (market_prices :json))
+  (output
+    (transaction_report :pdf)
+    (promotion_plan :json)
+    (chat_responses :json)
+    (maps_updates :geojson)
+    (inventory_report :xlsx)
+    (compliance_log :json)
+    (restock_orders :json)
+    (security_alerts :json)
+    (audit_trail :json)
+    (delivery_orders :json))
+  // Dependencies
+  #import "sqlite_db.aln"
+  #import "coremark_api.aln"
+  #import "clover_pos.aln"
+  #import "verifone_topaz.aln"
+  #import "quantum_synergy.aln"
+  #import "google_maps.aln"
+  #import "ai_security.aln"
+  #import "delivery_scheduler.aln"
+  #import "compliance_enforcer.aln"
+  #import "monitoring.aln"
+
+  // Initialize Databases
+  (rule initialize_databases
+    (when (not (file_exists "/data/unified_retail_db.sqlite"))
+      (do
+        (sqlite_create_db "/data/unified_retail_db.sqlite")
+        (sqlite_execute "
+          CREATE TABLE pos_transactions (
+            transaction_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            terminal_id TEXT NOT NULL,
+            items JSON NOT NULL,
+            total DECIMAL(10,2) NOT NULL,
+            payment_type TEXT NOT NULL,
+            tx_hash TEXT NOT NULL,
+            quantum_sig TEXT NOT NULL,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+          );
+          CREATE TABLE quantum_synergy_trades (
+            trade_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            blockchain TEXT NOT NULL,
+            energy_type TEXT NOT NULL,
+            units INTEGER NOT NULL,
+            price_per_kwh DECIMAL(10,2) NOT NULL,
+            contract_address TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+          );
+          CREATE TABLE conversation_flows (
+            flow_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bot_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            intents JSON NOT NULL,
+            responses JSON NOT NULL,
+            platform TEXT NOT NULL,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+          );
+          CREATE TABLE merchandise_catalog (
+            upc TEXT PRIMARY KEY,
+            product_name TEXT NOT NULL,
+            category TEXT NOT NULL,
+            price DECIMAL(10,2) NOT NULL,
+            stock INTEGER NOT NULL,
+            vendor TEXT NOT NULL,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+          );
+          CREATE TABLE promotions (
+            promo_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            type TEXT NOT NULL,
+            discount DECIMAL(5,2),
+            start_date DATETIME NOT NULL,
+            end_date DATETIME NOT NULL,
+            items JSON,
+            status TEXT NOT NULL,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+          );
+          CREATE TABLE compliance_flags (
+            flag_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT,
+            description TEXT NOT NULL,
+            action_taken TEXT NOT NULL,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+          );
+          CREATE TABLE delivery_orders (
+            order_id TEXT PRIMARY KEY,
+            vendor TEXT NOT NULL,
+            upc TEXT NOT NULL,
+            quantity INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+          );
+          CREATE TABLE security_alerts (
+            alert_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            camera_id TEXT NOT NULL,
+            event_json JSON NOT NULL,
+            confidence DECIMAL(5,2) NOT NULL,
+            status TEXT NOT NULL,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+          );
+        ")
+        (log_event "Database initialized" :info))))
+
+  // Coremark Price Sync
+  (rule sync_coremark_prices
+    (when (and (api_connected? "https://api.coremark.com/v3") (equals current_time next_sync_time))
+      (do
+        (let prices = api_fetch "https://api.coremark.com/v3/sites/42445/prices")
+        (for (p in prices)
+          (sqlite_execute "
+            UPDATE merchandise_catalog SET price = :price WHERE upc = :upc
+          " :params { price: p.price, upc: p.upc }))
+        (log_event "Coremark price sync completed" :info)))
+    (when (api_failed? "https://api.coremark.com/v3")
+      (do
+        (trigger_fallback_pricing)
+        (send_alert "Coremark API unreachable, fallback activated"))))
+
+  // Fuel Pricing
+  (rule manage_fuel_pricing
+    (when (greater competitor_price("7-Eleven","regular") our_price("regular"))
+      (do
+        (set_fuel_price "regular" (subtract (competitor_price "7-Eleven" "regular") 0.03))
+        (log_event "Fuel price undercut 7-Eleven" :warning)))
+    (when (is_holiday)
+      (do
+        (increase_fuel_price (add base_fuel_price 0.10))
+        (log_event "Holiday premium applied to fuel prices" :info))))
+
+  // UPC Scan Processing
+  (rule process_upc_scans
+    (when (event_scan_received upc_scans)
+      (for (scan in upc_scans)
+        (if (is_valid_upc scan.upc)
+          (do
+            (let product_info = api_lookup_upc scan.upc ["https://upcdatabase.org/search" "https://www.barcodelookup.com/" "https://www.upcitemdb.com/"])
+            (if (and product_info (greater product_info.stock 0))
+              (do
+                (decrement_stock scan.upc scan.quantity)
+                (sqlite_execute "
+                  UPDATE merchandise_catalog SET stock = stock - :q WHERE upc = :upc
+                " :params { q: scan.quantity, upc: scan.upc }))
+              (do
+                (trigger_low_stock_alarm scan.upc)
+                (notify_manager "Unknown or low stock UPC detected: " scan.upc))))
+          (do
+            (log_error "Invalid UPC scan format: " scan.upc :error)
+            (add_missing_upc scan.upc))))))
+
+  // Promotions Management
+  (rule manage_promotions
+    (when (new_promotions_detected promotions_data)
+      (for (promo in promotions_data)
+        (if (within_date_range promo.start_date promo.end_date)
+          (do
+            (validate_promotion_compliance promo ["AZ_retail_laws" "FDA_21_CFR_1143.5"])
+            (sqlite_execute "
+              INSERT INTO promotions (name, type, discount, start_date, end_date, items, status) VALUES (:name, :type, :discount, :start_date, :end_date, :items, 'active')
+            " :params promo)
+            (generate_signage promo.template promo.content)
+            (update_esl_tags promo.items)
+            (log_event "Promotion activated: " promo.name :info))))
+    (when (expired_promotions_found)
+      (for (ep in expired_promotions)
+        (do
+          (sqlite_execute "
+            UPDATE promotions SET status = 'expired' WHERE promo_id = :id
+          " :params { id: ep.promo_id })
+          (remove_signage ep.promo_id)
+          (archive_promotion_data ep.promo_id)
+          (log_event "Promotion expired and archived: " ep.name :info)))))
+
+  // Google Maps Updates
+  (rule update_google_maps
+    (when (or (changed? store_hours) (updated? inventory_data))
+      (do
+        (let store_json = create_store_geojson
+          (:address "7849 N 43rd Ave, Phoenix, AZ, 85051"
+            :hours store_hours
+            :inventory inventory_data
+            :fuel_prices fuel_prices))
+        (api_post
+          "https://mybusiness.googleapis.com/v4/accounts/1234567890/localPosts"
+          headers {
+            "Authorization" "Bearer $GOOGLE_MAPS_API_KEY"
+            "Content-Type" "application/json"
+          }
+          body store_json)
+        (log_event "Google Maps data updated" :info)))
+    (when (google_maps_update_failed)
+      (do
+        (log_error "Google Maps update failed" :error)
+        (trigger_backup_storage))))
+
+  // Chatbot Query Handling
+  (rule handle_chat_queries
+    (when (new_chat_query chat_queries)
+      (do
+        (parse_chat_query chat_queries.last_query)
+        (inject_rag
+          :model "all-MiniLM-L12-v2"
+          :context [
+            concat "query: " chat_queries.last_query.text
+            concat "inventory: " serialize(inventory_data)
+            concat "promotions: " serialize(promotions_data)
+          ]
+          :vector_db "milvus"
+          :top_k 15)
+        (sqlite_execute "
+          INSERT INTO conversation_flows (bot_id, user_id, intents, responses, platform, timestamp) VALUES ('pos_quantum_synergy_chat_bot', :user_id, :intents, :responses, :platform, CURRENT_TIMESTAMP)
+        " :params chat_queries.last_query)
+        (respond_on_platform chat_queries.last_query.platform (generate_response chat_queries.last_query))))
+    (when (scheduled_interval 1800)
+      (do
+        (fetch_recent_queries)
+        (analyze_trends_in_queries)
+        (optimize_chatbot_responses))))
+
+  // QuantumSynergyCore Trading
+  (rule execute_quantum_synergy_trade
+    (when (trade_requested quantum_trade)
+      (do
+        (validate_trade_request quantum_trade)
+        (deploy_smart_contract
+          :type "quantum_synergy_trading"
+          :blockchain quantum_trade.blockchain
+          :code "
+            pragma solidity ^0.8.0;
+            contract QuantumSynergyTrading {
+              address public owner;
+              uint256 public pricePerKwh;
+              mapping(address => uint256) public energyBalances;
+              constructor(uint256 _pricePerKwh) {
+                owner = msg.sender;
+                pricePerKwh = _pricePerKwh;
+              }
+              function tradeEnergy(uint256 units) public payable {
+                require(msg.value >= units * pricePerKwh, 'Insufficient payment');
+                energyBalances[msg.sender] += units;
+                payable(owner).transfer(msg.value);
+              }
+            }
+          "
+          :endpoint config.blockchain_endpoints[quantum_trade.blockchain]
+          :params [quantum_trade.price_per_kwh])
+        (sqlite_execute "
+          INSERT INTO quantum_synergy_trades (user_id, blockchain, energy_type, units, price_per_kwh, contract_address, timestamp) VALUES (:user_id, :blockchain, :energy_type, :units, :price_per_kwh, :contract_address, CURRENT_TIMESTAMP)
+        " :params quantum_trade))))
+
+  // Verifone/Topaz Integration
+  (rule capture_verifone_transactions
+    (when (serial_data_received :port "COM3")
+      (do
+        (let serial_data = read_serial_data :port "COM3" :baudrate 9600)
+        (let parsed_tx = parse_transaction_data serial_data)
+        (sqlite_execute "
+          INSERT INTO pos_transactions (user_id, terminal_id, items, total, payment_type, tx_hash, quantum_sig, timestamp) VALUES (:user_id, :terminal_id, :items, :total, :payment_type, :tx_hash, :quantum_sig, CURRENT_TIMESTAMP)
+        " :params parsed_tx)
+        (overlay_video_feed_blue_iris parsed_tx :max_lines 9 :wipe_time 4.5))))
+
+  // Clover POS Integration
+  (rule sync_clover_pos
+    (when (sale_detected :source "clover")
+      (do
+        (let clover_tx = api_fetch "https://api.clover.com/v3/merchants/{merchant_id}/orders")
+        (sqlite_execute "
+          INSERT INTO pos_transactions (user_id, terminal_id, items, total, payment_type, tx_hash, quantum_sig, timestamp) VALUES (:user_id, :terminal_id, :items, :total, :payment_type, :tx_hash, :quantum_sig, CURRENT_TIMESTAMP)
+        " :params clover_tx)
+        (update_inventory_with_sales clover_tx.items))))
+
+  // Compliance Enforcement
+  (rule enforce_compliance
+    (when (purchase_attempted :category "tobacco")
+      (do
+        (verify_customer_age :min_age 21)
+        (if (customer_age_verified)
+          (allow_transaction)
+          (do
+            (block_transaction)
+            (sqlite_execute "
+              INSERT INTO compliance_flags (user_id, description, action_taken, timestamp) VALUES (:user_id, 'Underage tobacco purchase attempt', 'Transaction blocked', CURRENT_TIMESTAMP)
+            " :params purchase_attempts)
+            (send_alert "compliance_team" "Blocked tobacco purchase attempt due to age verification failure")))))
+    (when (audit_requested)
+      (do
+        (generate_compliance_report :standards ["PCI-DSS" "GDPR" "HIPAA" "SOC2" "ISO-8583" "FDA_21_CFR_1143.5"])
+        (submit_report_to_authority "https://azcompliance.gov/api/submit")
+        (log_event "Compliance audit report submitted" :info))))
+
+  // AI Security Monitoring
+  (rule ai_security_monitoring
+    (when (new_frame camera_feeds)
+      (do
+        (let suspicious_events = api_infer_suspicious_behavior "http://ai-server/api/detect" camera_feeds.last_frame)
+        (for (event in suspicious_events)
+          (sqlite_execute "
+            INSERT INTO security_alerts (camera_id, event_json, confidence, status, timestamp) VALUES (:camera_id, :event_json, :confidence, 'pending', CURRENT_TIMESTAMP)
+          " :params event)
+          (if (greater event.confidence 0.9)
+            (send_alert "security_team" event.message))))))
+
+  // Delivery Scheduling (Veeder-Root)
+  (rule veed_r_root_delivery_scheduler
+    (when (scheduled_interval 3600)
+      (do
+        (let low_inventory_items = filter_items inventory_data (lambda (itm) (less itm.stock 15)))
+        (for (item in low_inventory_items)
+          (let qty_to_order = compute_order_quantity item)
+          (let order_id = api_place_order item.vendor item.upc qty_to_order)
+          (sqlite_execute "
+            INSERT INTO delivery_orders (order_id, vendor, upc, quantity, status, timestamp) VALUES (:order_id, :vendor, :upc, :qty, 'pending', CURRENT_TIMESTAMP)
+          " :params { order_id: order_id, vendor: item.vendor, upc: item.upc, qty: qty_to_order })
+          (log_event "Scheduled delivery order placed for UPC: " item.upc :info)))))
+
+  // Observability
+  (rule observability_monitor
+    (when (scheduled_interval 5)
+      (do
+        (collect_system_metrics ["cpu_usage" "memory_usage" "transaction_throughput" "chatbot_response_time"])
+        (export_metrics_prometheus "http://prometheus:9090/api/v1/write")
+        (refresh_grafana_dashboard "pos_quantum_synergy_chat_metrics"))))
+
+  // Docker Volume Management
+  (rule docker_volume_management
+    (when (not (docker_volume_exists "pos_quantum_synergy_chat_data_volume"))
+      (do
+        (docker_cmd "volume create pos_quantum_synergy_chat_data_volume")
+        (docker_cmd "run -v pos_quantum_synergy_chat_data_volume:/data pos_quantum_synergy_chat_image:latest --detach")
+        (log_event "Docker volume created and container started" :info))))
+)
+
+// Supporting Modules
+(module ai_security
+  (input (camera_frame :json))
+  (output (security_alerts :json))
+  (rule detect_behavior
+    (when (new_frame camera_frame)
+      (do
+        (let events = api_call "http://ai-server/api/detect" camera_frame.data)
+        (for (e in events)
+          (store security_alerts e)
+          (if (greater e.confidence 0.9) (send_alert "security_team" e.description)))))))
+
+(module delivery_scheduler
+  (input (inventory_snapshot :json))
+  (output (restock_orders :json))
+  (rule schedule_orders
+    (when (scheduled_interval 1800)
+      (do
+        (let low_stock = filter inventory_snapshot (lambda (i) (less i.stock_threshold 20)))
+        (for (item in low_stock)
+          (let qty = calculate_optimal_order item)
+          (let order_id = api_place_order item.vendor item.upc qty)
+          (record_restock_order order_id item vendor qty))))))
+
+(module compliance_enforcer
+  (input (purchase_attempt :json))
+  (output (compliance_violations :json))
+  (rule tobacco_age_check
+    (when (equals purchase_attempt.category "tobacco")
+      (do
+        (if (not (verify_age purchase_attempt.customer_age 21))
+          (do
+            (block_transaction purchase_attempt)
+            (log_violation "Underage purchase blocked")
+            (alert_compliance_team purchase_attempt)))))))
