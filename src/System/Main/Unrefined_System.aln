@@ -1,3 +1,336 @@
+@Sys>Lang>ALN>Script>gatorade_compact.aln
+@Meta {
+  ver: "1.7.0",
+  desc: "Compacted Gatorade catalog & AMPM #42445 POS merch, stored in dep.branch0.AMPM.POS.merch.salesfloor.42445",
+  compl: ["PCI-DSS", "GDPR", "SOC2", "ISO-8583", "FDA_21_CFR_1143.5"],
+  crt_at: "2025-07-31T18:23:00-07:00",
+  tgt_ret: ["AMPM"],
+  site_id: "42445"
+}
+
+@Dep>Pkg>AMPM_POS {
+  @Desc: "AMPM #42445 POS w/ compacted catalog in dep.branch0.AMPM.POS.merch.salesfloor.42445"
+  @Ver: "1.7.0"
+  @Feat: ["cmpct_cat", "hier_dep", "coremark_sync", "pos_scan", "aln_chat", "async_ops", "supp_out"]
+  @Deps: [
+    "v8_eng>=9.0.0",
+    "pg_driver>=15.0.0",
+    "redis>=7.0.0",
+    "kafka>=3.6.0",
+    "milvus>=2.3.0",
+    "rag_emb>=1.2.0",
+    "prometheus>=2.5.0",
+    "grafana>=8.0.0",
+    "loki>=2.2.0",
+    "react>=18.2.0"
+  ]
+  @Cfg {
+    db: {
+      typ: "PostgreSQL",
+      url: "pg://cluster.ampm:5432/ampm_db",
+      sch: {
+        merch_cat: "
+          CREATE TABLE IF NOT EXISTS merch_cat (
+            upc VARCHAR(13) PRIMARY KEY,
+            name VARCHAR(100) NOT NULL,
+            cat VARCHAR(50) NOT NULL,
+            flav VARCHAR(50),
+            sz VARCHAR(20),
+            wt VARCHAR(20),
+            cal INT,
+            prc DEC(10,2),
+            stk INT,
+            vnd VARCHAR(50),
+            ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+          );"
+      }
+    }
+    log: {
+      typ: "Kafka",
+      tpcs: ["inv_upd", "pos_scn", "chat_int"],
+      url: "kafka://cluster.ampm:9092"
+    }
+    api: {
+      coremark: {
+        key: "/etc/ampm/api.key",
+        endpt: "https://api.coremark.com/v3/sites/42445/prices"
+      }
+    }
+    ui: {
+      frmwk: "React",
+      endpt: "/ui/ampm_dash",
+      cmps: ["InvGrid", "CatView", "GatoradeFltr"]
+    }
+    stor: {
+      persist: true,
+      supp_out: true,
+      cat_pth: "dep.branch0.AMPM.POS.merch.salesfloor.42445"
+    }
+  }
+  @Auto {
+    @INIT {
+      @CON pg { url: cfg.db.url, ext: ["pgvector"] }
+      @CON redis { url: "redis://cluster.ampm:6379", auth: "jwt", ttl: "24h" }
+      @CON kafka { url: cfg.log.url, part: 16 }
+      @LD v8_eng { ver: "9.0.0", ctx: "ALN_JS" }
+      @CRT tbl IN pg { q: cfg.db.sch.merch_cat }
+    }
+    @ACT sync_cat {
+      @EXEC {
+        @SET key = RD_FILE(cfg.api.coremark.key)
+        @FOR dep IN @Deps {
+          @FOR itm IN dep.Items {
+            @RUN sql IN pg {
+              q: "
+                INSERT INTO merch_cat (upc, name, cat, flav, sz, wt, cal, prc, stk, vnd, ts)
+                VALUES ('{itm.upc}', '{itm.name}', '{itm.cat}', '{itm.flav}', '{itm.sz}', '{itm.wt}', {itm.cal}, {itm.prc}, {itm.stk}, '{itm.vnd}', CURRENT_TIMESTAMP)
+                ON CONFLICT (upc) DO UPDATE
+                SET name=EXCLUDED.name,cat=EXCLUDED.cat,flav=EXCLUDED.flav,sz=EXCLUDED.sz,wt=EXCLUDED.wt,cal=EXCLUDED.cal,prc=EXCLUDED.prc,stk=EXCLUDED.stk,vnd=EXCLUDED.vnd,ts=CURRENT_TIMESTAMP;"
+            }
+            @LOG upd TO kafka { tpc: "inv_upd", dtl: "Synced {itm.upc} in {cfg.stor.cat_pth}" }
+            @CACHE itm IN redis { key: "inv:{itm.upc}", ttl: "24h" }
+          }
+        }
+        @RET { sts: "synced", upd_cnt: SUM(@Deps.map(dep => dep.Items.len)) }
+      }
+      @SCHED { cron: "*/30 * * * *" }
+    }
+    @ACT rdr_ui {
+      @OUT { endpt: "/ui/ampm_dash" }
+      @EXEC {
+        @SET scr = "
+          import React,{useState,useEffect} from 'https://cdn.jsdelivr.net/npm/react@18.2.0/dist/react.min.js';
+          import ReactDOM from 'https://cdn.jsdelivr.net/npm/react-dom@18.2.0/dist/react-dom.min.js';
+          import 'https://cdn.tailwindcss.com';
+          const InvGrid=()=>{
+            const [items,setItems]=useState([]);
+            const [cat,setCat]=useState('All');
+            const [flavFltr,setFlavFltr]=useState('');
+            useEffect(()=>{ 
+              (async()=>{
+                const res=await fetch('/api/ampm/inv');
+                setItems(await res.json());
+              })();
+            },[]);
+            const fltrItems=items.filter(i=>
+              (cat==='All'||i.cat===cat)&&
+              (flavFltr===''||i.flav?.toLowerCase().includes(flavFltr.toLowerCase()))
+            );
+            return `
+              <div class='container mx-auto p-4'>
+                <h1 class='text-2xl font-bold mb-4'>AMPM #42445 Inv Cat</h1>
+                <div class='flex mb-4'>
+                  <select class='mr-2 p-2 border rounded' onChange={e=>setCat(e.target.value)}>
+                    <option>All</option><option>Beverages</option><option>Convenience</option><option>Candy</option><option>Cigarettes</option><option>HotFoods</option>
+                  </select>
+                  <input type='text' placeholder='Fltr by flav...' class='p-2 border rounded' onChange={e=>setFlavFltr(e.target.value)}/>
+                </div>
+                <div class='grid grid-cols-4 gap-4'>
+                  ${fltrItems.map(i=>`
+                    <div key=${i.upc} class='border p-4 rounded'>
+                      <h3 class='font-bold'>${i.name}</h3>
+                      <p>Flav: ${i.flav||'N/A'}</p>
+                      <p>Sz: ${i.sz}</p>
+                      <p>Wt: ${i.wt}</p>
+                      <p>Cal: ${i.cal}</p>
+                      <p>Prc: $${i.prc}</p>
+                      <p>Stk: ${i.stk}</p>
+                      <p>Vnd: ${i.vnd}</p>
+                    </div>
+                  `).join('')}
+                </div>
+              </div>
+            `;
+          };
+          ReactDOM.render(<InvGrid/>,document.getElementById('root'));
+        "
+        @CALL exec_js_aln { scr: scr, op_typ: "map_ui" }
+        @RET { sts: "rdrd", endpt: "/ui/ampm_dash" }
+      }
+    }
+    @ACT chat_qry {
+      @IN { usr_id: str, qry_txt: str, ctx: map<str,any> }
+      @EXEC {
+        @SET scr = "
+          const hdlQry=async()=>{
+            const ragRes=await bindings.rag.inject({
+              model:'all-MiniLM-L12-v2',
+              ctx:['qry:${qry_txt}','usr:${usr_id}','site:42445','meta:${JSON.stringify(ctx)}'],
+              vec_db:'milvus',
+              top_k:15
+            });
+            const res=await bindings.ALN_Chatbot.gen_res('${qry_txt}',ragRes);
+            await bindings.pg.qry(`
+              INSERT INTO conv_flows (bot_id,usr_id,intents,res,plat,ts)
+              VALUES ('aln_chatbot_42445','${usr_id}','${JSON.stringify(ragRes.intents)}','${res}','web',CURRENT_TIMESTAMP)
+            `);
+            await bindings.kafka.send('chat_int',`Inv qry processed for ${usr_id} at ${cfg.stor.cat_pth}`);
+            return {sts:'responded',res};
+          };
+          hdlQry();
+        "
+        @CALL exec_js_aln { scr: scr, op_typ: "inv_qry" }
+        @RET { sts: "responded", res: result.res }
+      }
+    }
+  }
+  @Deps {
+    dep.branch0.AMPM.POS.merch.salesfloor.42445.bev.GatoradeTQ {
+      @Items: [
+        { upc: "052000181818", name: "Gatorade TQ Fruit Punch", cat: "Beverages", flav: "Fruit Punch", sz: "20 fl oz", wt: "1.5 lbs", cal: 140, prc: 2.29, stk: 100, vnd: "Coremark" },
+        { upc: "052000338294", name: "Gatorade TQ Orange", cat: "Beverages", flav: "Orange", sz: "20 fl oz", wt: "1.5 lbs", cal: 140, prc: 2.29, stk: 110, vnd: "Coremark" },
+        { upc: "052000208399", name: "Gatorade TQ Glacier Freeze", cat: "Beverages", flav: "Glacier Freeze", sz: "20 fl oz", wt: "1.5 lbs", cal: 140, prc: 2.29, stk: 100, vnd: "Coremark" },
+        { upc: "052000338300", name: "Gatorade TQ Fierce Grape", cat: "Beverages", flav: "Fierce Grape", sz: "20 fl oz", wt: "1.5 lbs", cal: 140, prc: 2.29, stk: 80, vnd: "Coremark" },
+        { upc: "052000321562", name: "Gatorade TQ Fierce Blue Cherry", cat: "Beverages", flav: "Blue Cherry", sz: "20 fl oz", wt: "1.5 lbs", cal: 140, prc: 2.29, stk: 100, vnd: "Coremark" },
+        { upc: "052000321579", name: "Gatorade TQ Citrus Cooler", cat: "Beverages", flav: "Citrus Cooler", sz: "20 fl oz", wt: "1.5 lbs", cal: 140, prc: 2.29, stk: 100, vnd: "Coremark" },
+        { upc: "052000321586", name: "Gatorade TQ Lightning Blast", cat: "Beverages", flav: "Blackberry Raspberry", sz: "20 fl oz", wt: "1.5 lbs", cal: 140, prc: 2.29, stk: 100, vnd: "Coremark" },
+        { upc: "052000135664", name: "Gatorade TQ Cool Blue", cat: "Beverages", flav: "Cool Blue", sz: "28 fl oz", wt: "2.0 lbs", cal: 190, prc: 2.49, stk: 85, vnd: "Coremark" },
+        { upc: "052000321555", name: "Gatorade TQ Glacier Cherry", cat: "Beverages", flav: "Glacier Cherry", sz: "28 fl oz", wt: "2.0 lbs", cal: 190, prc: 2.49, stk: 90, vnd: "Coremark" },
+        { upc: "052000135671", name: "Gatorade TQ Arctic Blitz", cat: "Beverages", flav: "Arctic Blitz", sz: "28 fl oz", wt: "2.0 lbs", cal: 190, prc: 2.49, stk: 85, vnd: "Coremark" },
+        { upc: "052000208405", name: "Gatorade TQ Strawberry Lemonade", cat: "Beverages", flav: "Strawberry Lemonade", sz: "28 fl oz", wt: "2.0 lbs", cal: 190, prc: 2.49, stk: 90, vnd: "Coremark" },
+        { upc: "052000135688", name: "Gatorade TQ Riptide Rush", cat: "Beverages", flav: "Riptide Rush", sz: "28 fl oz", wt: "2.0 lbs", cal: 190, prc: 2.49, stk: 85, vnd: "Coremark" },
+        { upc: "052000208412", name: "Gatorade TQ Strawberry Kiwi", cat: "Beverages", flav: "Strawberry Kiwi", sz: "28 fl oz", wt: "2.0 lbs", cal: 190, prc: 2.49, stk: 90, vnd: "Coremark" },
+        { upc: "052000135695", name: "Gatorade TQ Midnight Ice", cat: "Beverages", flav: "Citrus Punch", sz: "28 fl oz", wt: "2.0 lbs", cal: 190, prc: 2.49, stk: 85, vnd: "Coremark" },
+        { upc: "052000208429", name: "Gatorade TQ Aqua Blast", cat: "Beverages", flav: "Tropical", sz: "28 fl oz", wt: "2.0 lbs", cal: 190, prc: 2.49, stk: 90, vnd: "Coremark" },
+        { upc: "052000338317", name: "Gatorade TQ Lemon-Lime", cat: "Beverages", flav: "Lemon-Lime", sz: "20 fl oz", wt: "1.5 lbs", cal: 140, prc: 2.29, stk: 110, vnd: "Coremark" },
+        { upc: "052000338324", name: "Gatorade TQ Berry", cat: "Beverages", flav: "Berry", sz: "20 fl oz", wt: "1.5 lbs", cal: 140, prc: 2.29, stk: 100, vnd: "Coremark" },
+        { upc: "052000321593", name: "Gatorade TQ Lime Cucumber", cat: "Beverages", flav: "Lime Cucumber", sz: "20 fl oz", wt: "1.5 lbs", cal: 140, prc: 2.29, stk: 95, vnd: "Coremark" },
+        { upc: "052000208436", name: "Gatorade TQ Mixed Berry", cat: "Beverages", flav: "Mixed Berry", sz: "28 fl oz", wt: "2.0 lbs", cal: 190, prc: 2.49, stk: 85, vnd: "Coremark" },
+        { upc: "052000135701", name: "Gatorade TQ Tropical Cooler", cat: "Beverages", flav: "Tropical Cooler", sz: "28 fl oz", wt: "2.0 lbs", cal: 190, prc: 2.49, stk: 90, vnd: "Coremark" },
+        { upc: "052000338331", name: "Gatorade TQ Fruit Punch", cat: "Beverages", flav: "Fruit Punch", sz: "12 fl oz", wt: "0.8 lbs", cal: 80, prc: 1.79, stk: 120, vnd: "Coremark" },
+        { upc: "052000338348", name: "Gatorade TQ Orange", cat: "Beverages", flav: "Orange", sz: "12 fl oz", wt: "0.8 lbs", cal: 80, prc: 1.79, stk: 120, vnd: "Coremark" },
+        { upc: "052000338355", name: "Gatorade TQ Lemon-Lime", cat: "Beverages", flav: "Lemon-Lime", sz: "12 fl oz", wt: "0.8 lbs", cal: 80, prc: 1.79, stk: 120, vnd: "Coremark" },
+        { upc: "052000338362", name: "Gatorade TQ Glacier Freeze", cat: "Beverages", flav: "Glacier Freeze", sz: "12 fl oz", wt: "0.8 lbs", cal: 80, prc: 1.79, stk: 120, vnd: "Coremark" },
+        { upc: "052000338379", name: "Gatorade TQ Cool Blue", cat: "Beverages", flav: "Cool Blue", sz: "12 fl oz", wt: "0.8 lbs", cal: 80, prc: 1.79, stk: 120, vnd: "Coremark" }
+      ]
+    }
+    dep.branch0.AMPM.POS.merch.salesfloor.42445.bev.GatoradeZero {
+      @Items: [
+        { upc: "052000042122", name: "Gatorade Zero Lemon-Lime", cat: "Beverages", flav: "Lemon-Lime", sz: "20 fl oz", wt: "1.5 lbs", cal: 0, prc: 2.29, stk: 95, vnd: "Coremark" },
+        { upc: "052000042146", name: "Gatorade Zero Glacier Cherry", cat: "Beverages", flav: "Glacier Cherry", sz: "20 fl oz", wt: "1.5 lbs", cal: 0, prc: 2.29, stk: 95, vnd: "Coremark" },
+        { upc: "052000042153", name: "Gatorade Zero Berry", cat: "Beverages", flav: "Berry", sz: "20 fl oz", wt: "1.5 lbs", cal: 0, prc: 2.29, stk: 90, vnd: "Coremark" },
+        { upc: "052000042160", name: "Gatorade Zero Orange", cat: "Beverages", flav: "Orange", sz: "20 fl oz", wt: "1.5 lbs", cal: 0, prc: 2.29, stk: 95, vnd: "Coremark" },
+        { upc: "052000042177", name: "Gatorade Zero Fruit Punch", cat: "Beverages", flav: "Fruit Punch", sz: "20 fl oz", wt: "1.5 lbs", cal: 0, prc: 2.29, stk: 95, vnd: "Coremark" },
+        { upc: "052000042184", name: "Gatorade Zero Cool Blue", cat: "Beverages", flav: "Cool Blue", sz: "20 fl oz", wt: "1.5 lbs", cal: 0, prc: 2.29, stk: 95, vnd: "Coremark" },
+        { upc: "052000042313", name: "Gatorade Zero Lemon-Lime", cat: "Beverages", flav: "Lemon-Lime", sz: "28 fl oz", wt: "2.0 lbs", cal: 0, prc: 2.49, stk: 90, vnd: "Coremark" },
+        { upc: "052000042320", name: "Gatorade Zero Glacier Cherry", cat: "Beverages", flav: "Glacier Cherry", sz: "28 fl oz", wt: "2.0 lbs", cal: 0, prc: 2.49, stk: 90, vnd: "Coremark" },
+        { upc: "052000042337", name: "Gatorade Zero Fruit Punch", cat: "Beverages", flav: "Fruit Punch", sz: "28 fl oz", wt: "2.0 lbs", cal: 0, prc: 2.49, stk: 90, vnd: "Coremark" },
+        { upc: "052000042344", name: "Gatorade Zero Orange", cat: "Beverages", flav: "Orange", sz: "28 fl oz", wt: "2.0 lbs", cal: 0, prc: 2.49, stk: 90, vnd: "Coremark" },
+        { upc: "052000042351", name: "Gatorade Zero Glacier Freeze", cat: "Beverages", flav: "Glacier Freeze", sz: "20 fl oz", wt: "1.5 lbs", cal: 0, prc: 2.29, stk: 95, vnd: "Coremark" },
+        { upc: "052000042368", name: "Gatorade Zero Mixed Berry", cat: "Beverages", flav: "Mixed Berry", sz: "20 fl oz", wt: "1.5 lbs", cal: 0, prc: 2.29, stk: 90, vnd: "Coremark" },
+        { upc: "052000042375", name: "Gatorade Zero Strawberry Kiwi", cat: "Beverages", flav: "Strawberry Kiwi", sz: "20 fl oz", wt: "1.5 lbs", cal: 0, prc: 2.29, stk: 95, vnd: "Coremark" },
+        { upc: "052000042382", name: "Gatorade Zero Arctic Blitz", cat: "Beverages", flav: "Arctic Blitz", sz: "20 fl oz", wt: "1.5 lbs", cal: 0, prc: 2.29, stk: 95, vnd: "Coremark" },
+        { upc: "052000042399", name: "Gatorade Zero Glacier Freeze", cat: "Beverages", flav: "Glacier Freeze", sz: "28 fl oz", wt: "2.0 lbs", cal: 0, prc: 2.49, stk: 90, vnd: "Coremark" }
+      ]
+    }
+    dep.branch0.AMPM.POS.merch.salesfloor.42445.bev.Gatorlyte {
+      @Items: [
+        { upc: "052000336948", name: "Gatorlyte Cherry Lime", cat: "Beverages", flav: "Cherry Lime", sz: "20 fl oz", wt: "1.5 lbs", cal: 50, prc: 2.49, stk: 80, vnd: "Coremark" },
+        { upc: "052000336955", name: "Gatorlyte Strawberry Kiwi", cat: "Beverages", flav: "Strawberry Kiwi", sz: "20 fl oz", wt: "1.5 lbs", cal: 50, prc: 2.49, stk: 80, vnd: "Coremark" },
+        { upc: "052000336962", name: "Gatorlyte Watermelon", cat: "Beverages", flav: "Watermelon", sz: "20 fl oz", wt: "1.5 lbs", cal: 50, prc: 2.49, stk: 80, vnd: "Coremark" },
+        { upc: "052000042191", name: "Gatorlyte Zero Cherry Lime", cat: "Beverages", flav: "Cherry Lime", sz: "20 fl oz", wt: "1.5 lbs", cal: 0, prc: 2.49, stk: 85, vnd: "Coremark" },
+        { upc: "052000042207", name: "Gatorlyte Zero Strawberry Kiwi", cat: "Beverages", flav: "Strawberry Kiwi", sz: "20 fl oz", wt: "1.5 lbs", cal: 0, prc: 2.49, stk: 85, vnd: "Coremark" },
+        { upc: "052000042214", name: "Gatorlyte Zero Watermelon", cat: "Beverages", flav: "Watermelon", sz: "20 fl oz", wt: "1.5 lbs", cal: 0, prc: 2.49, stk: 85, vnd: "Coremark" },
+        { upc: "052000042406", name: "Gatorlyte Orange", cat: "Beverages", flav: "Orange", sz: "20 fl oz", wt: "1.5 lbs", cal: 50, prc: 2.49, stk: 80, vnd: "Coremark" }
+      ]
+    }
+    dep.branch0.AMPM.POS.merch.salesfloor.42445.bev.GatoradeFastTwitch {
+      @Items: [
+        { upc: "052000042221", name: "Gatorade Fast Twitch Strawberry Lemonade", cat: "Beverages", flav: "Strawberry Lemonade", sz: "12 fl oz", wt: "0.8 lbs", cal: 0, prc: 2.79, stk: 70, vnd: "Coremark" },
+        { upc: "052000042238", name: "Gatorade Fast Twitch Grape", cat: "Beverages", flav: "Grape", sz: "12 fl oz", wt: "0.8 lbs", cal: 0, prc: 2.79, stk: 70, vnd: "Coremark" },
+        { upc: "052000042245", name: "Gatorade Fast Twitch Glacier Freeze", cat: "Beverages", flav: "Glacier Freeze", sz: "12 fl oz", wt: "0.8 lbs", cal: 0, prc: 2.79, stk: 70, vnd: "Coremark" },
+        { upc: "052000042252", name: "Gatorade Fast Twitch Cool Blue", cat: "Beverages", flav: "Cool Blue", sz: "12 fl oz", wt: "0.8 lbs", cal: 0, prc: 2.79, stk: 70, vnd: "Coremark" },
+        { upc: "052000042269", name: "Gatorade Fast Twitch Tropical Mango", cat: "Beverages", flav: "Tropical Mango", sz: "12 fl oz", wt: "0.8 lbs", cal: 0, prc: 2.79, stk: 70, vnd: "Coremark" }
+      ]
+    }
+    dep.branch0.AMPM.POS.merch.salesfloor.42445.bev.GatoradePowder {
+      @Items: [
+        { upc: "052000340242", name: "Gatorade Powder Frost Glacier Freeze", cat: "Beverages", flav: "Glacier Freeze", sz: "50.9 oz", wt: "3.5 lbs", cal: 140, prc: 8.99, stk: 50, vnd: "Coremark" },
+        { upc: "052000340259", name: "Gatorade Powder Fruit Punch", cat: "Beverages", flav: "Fruit Punch", sz: "50.9 oz", wt: "3.5 lbs", cal: 140, prc: 8.99, stk: 50, vnd: "Coremark" },
+        { upc: "052000340266", name: "Gatorade Powder Lemon-Lime", cat: "Beverages", flav: "Lemon-Lime", sz: "50.9 oz", wt: "3.5 lbs", cal: 140, prc: 8.99, stk: 50, vnd: "Coremark" },
+        { upc: "052000340273", name: "Gatorade Powder Orange", cat: "Beverages", flav: "Orange", sz: "50.9 oz", wt: "3.5 lbs", cal: 140, prc: 8.99, stk: 50, vnd: "Coremark" },
+        { upc: "052000340280", name: "Gatorade Powder Riptide Rush", cat: "Beverages", flav: "Riptide Rush", sz: "50.9 oz", wt: "3.5 lbs", cal: 140, prc: 8.99, stk: 50, vnd: "Coremark" }
+      ]
+    }
+    dep.branch0.AMPM.POS.merch.salesfloor.42445.conv.Snacks {
+      @Items: [
+        { upc: "028000596323", name: "Lay's Classic Chips", cat: "Convenience", flav: "Classic", sz: "2.75 oz", wt: "0.17 lbs", cal: 400, prc: 1.89, stk: 90, vnd: "Coremark" },
+        { upc: "028000596347", name: "Lay's BBQ Chips", cat: "Convenience", flav: "BBQ", sz: "2.75 oz", wt: "0.17 lbs", cal: 390, prc: 1.89, stk: 85, vnd: "Coremark" },
+        { upc: "028000390142", name: "Doritos Cool Ranch", cat: "Convenience", flav: "Cool Ranch", sz: "2.75 oz", wt: "0.17 lbs", cal: 360, prc: 1.89, stk: 80, vnd: "Coremark" },
+        { upc: "036000291452", name: "Cheetos Crunchy", cat: "Convenience", flav: "Cheese", sz: "2 oz", wt: "0.13 lbs", cal: 320, prc: 1.69, stk: 90, vnd: "Coremark" },
+        { upc: "036000291469", name: "Cheetos Puffs", cat: "Convenience", flav: "Cheese", sz: "2.5 oz", wt: "0.16 lbs", cal: 320, prc: 1.69, stk: 90, vnd: "Coremark" }
+      ]
+    }
+    dep.branch0.AMPM.POS.merch.salesfloor.42445.candy.Choc {
+      @Items: [
+        { upc: "040000006054", name: "Snickers Bar", cat: "Candy", flav: "Choc Peanut", sz: "1.86 oz", wt: "0.12 lbs", cal: 250, prc: 1.79, stk: 90, vnd: "Coremark" },
+        { upc: "034000056088", name: "Reese's Peanut Butter Cups", cat: "Candy", flav: "Peanut Butter", sz: "1.5 oz", wt: "0.1 lbs", cal: 210, prc: 1.99, stk: 80, vnd: "Coremark" },
+        { upc: "040000000319", name: "M&M's Milk Choc", cat: "Candy", flav: "Milk Choc", sz: "1.69 oz", wt: "0.11 lbs", cal: 240, prc: 1.99, stk: 95, vnd: "Coremark" },
+        { upc: "028000003219", name: "Kit Kat Bar", cat: "Candy", flav: "Milk Choc", sz: "1.5 oz", wt: "0.1 lbs", cal: 210, prc: 1.79, stk: 80, vnd: "Coremark" },
+        { upc: "040000512346", name: "Milky Way Bar", cat: "Candy", flav: "Choc Caramel", sz: "1.84 oz", wt: "0.12 lbs", cal: 240, prc: 1.79, stk: 80, vnd: "Coremark" }
+      ]
+    }
+    dep.branch0.AMPM.POS.merch.salesfloor.42445.bev.Energy {
+      @Items: [
+        { upc: "070847811141", name: "Monster Energy Original", cat: "Beverages", flav: "Original", sz: "16 fl oz", wt: "1.1 lbs", cal: 210, prc: 2.99, stk: 70, vnd: "Coremark" },
+        { upc: "611269991000", name: "Red Bull Original", cat: "Beverages", flav: "Original", sz: "8.4 fl oz", wt: "0.6 lbs", cal: 110, prc: 2.49, stk: 80, vnd: "Coremark" },
+        { upc: "070847811158", name: "Monster Zero Ultra", cat: "Beverages", flav: "Zero Ultra", sz: "16 fl oz", wt: "1.1 lbs", cal: 0, prc: 2.99, stk: 70, vnd: "Coremark" },
+        { upc: "611269991017", name: "Red Bull Sugarfree", cat: "Beverages", flav: "Sugarfree", sz: "8.4 fl oz", wt: "0.6 lbs", cal: 0, prc: 2.49, stk: 75, vnd: "Coremark" },
+        { upc: "070847811165", name: "Monster Java Coffee", cat: "Beverages", flav: "Coffee", sz: "15 fl oz", wt: "1.0 lbs", cal: 220, prc: 2.99, stk: 65, vnd: "Coremark" }
+      ]
+    }
+    dep.branch0.AMPM.POS.merch.salesfloor.42445.cigs.Tobacco {
+      @Items: [
+        { upc: "041271021516", name: "Marlboro Red Pk", cat: "Cigarettes", flav: "Red", sz: "20 cigs", wt: "0.06 lbs", cal: 0, prc: 7.99, stk: 50, vnd: "Coremark" },
+        { upc: "041271021523", name: "Camel Blue Pk", cat: "Cigarettes", flav: "Blue", sz: "20 cigs", wt: "0.06 lbs", cal: 0, prc: 7.49, stk: 60, vnd: "Coremark" },
+        { upc: "041271021547", name: "Newport Menthol Pk", cat: "Cigarettes", flav: "Menthol", sz: "20 cigs", wt: "0.06 lbs", cal: 0, prc: 7.99, stk: 55, vnd: "Coremark" },
+        { upc: "041271021554", name: "Pall Mall Red Pk", cat: "Cigarettes", flav: "Red", sz: "20 cigs", wt: "0.06 lbs", cal: 0, prc: 7.29, stk: 60, vnd: "Coremark" },
+        { upc: "041271021585", name: "Marlboro Silver Pk", cat: "Cigarettes", flav: "Silver", sz: "20 cigs", wt: "0.06 lbs", cal: 0, prc: 7.99, stk: 55, vnd: "Coremark" }
+      ]
+    }
+    dep.branch0.AMPM.POS.merch.salesfloor.42445.hotfood.Prep {
+      @Items: [
+        { upc: "851112004128", name: "AMPM Hot Dog", cat: "HotFoods", flav: "Beef", sz: "6 oz", wt: "0.38 lbs", cal: 320, prc: 2.99, stk: 50, vnd: "AMPM_Kitchen" },
+        { upc: "851112004135", name: "AMPM Cheeseburger", cat: "HotFoods", flav: "Beef Cheese", sz: "8 oz", wt: "0.5 lbs", cal: 600, prc: 4.99, stk: 40, vnd: "AMPM_Kitchen" },
+        { upc: "851112004142", name: "AMPM Chicken Tenders", cat: "HotFoods", flav: "Chicken", sz: "9 oz", wt: "0.56 lbs", cal: 450, prc: 5.49, stk: 45, vnd: "AMPM_Kitchen" },
+        { upc: "851112004159", name: "AMPM Pizza Slice Pepperoni", cat: "HotFoods", flav: "Pepperoni", sz: "6 oz", wt: "0.38 lbs", cal: 400, prc: 2.79, stk: 60, vnd: "AMPM_Kitchen" },
+        { upc: "851112004166", name: "AMPM Breakfast Burrito", cat: "HotFoods", flav: "Sausage Egg", sz: "7 oz", wt: "0.44 lbs", cal: 500, prc: 3.99, stk: 50, vnd: "AMPM_Kitchen" }
+      ]
+    }
+  }
+}
+
+@RET {
+  sts: "success",
+  msg: "Compacted ALN catalog w/ 44 Gatorade varieties (TQ, Zero, Gatorlyte, Fast Twitch, Powder) & 25 other items in dep.branch0.AMPM.POS.merch.salesfloor.42445",
+  upc_added: 69,
+  deps: ["GatoradeTQ", "GatoradeZero", "Gatorlyte", "GatoradeFastTwitch", "GatoradePowder", "Snacks", "Choc", "Energy", "Tobacco", "Prep"]
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 @System>Language>ALN>Script>gatorade_catalog.aln
 @Metadata {
   version: "1.3.0",
