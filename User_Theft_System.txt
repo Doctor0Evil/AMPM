@@ -1,0 +1,3 @@
+let's '"map"' out an intelligence database, Personality-matrix, & Behavior-Schema using "lisp" syntax features *'"adapted"' to *"ALN-Syntax"** as a *real* intelligence mock-up which uses visual-search-algorithms & machine-learning to "catch shoplifters" in stores & '"determine"' in real-time 100%-solid-results that has sandboxes to determine that the intelligence has correctly '"declared"'/'"flagged"' a "suspicious-person's" behavior as stealing & *not a false-positive*; 
+\\
+'Define' strings & constructs with arguments & 'add' another "branch' of parameters to the syntax for more-closely defining visual-behavior-patterns in human-activity to "image-Generation-models" & "Visual-Learning-Models"

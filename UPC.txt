@@ -1,0 +1,488 @@
+*https://www.barcodelookup.com/, https://www.upcitemdb.com/, https://www.upc-search.org/, https://www.upcs.com, https://scanbot.io/lookup-tool/, https://go-upc.com/barcode-lookup*
+\\
+Your trusted, leading UPC seller
+Home
+Buy UPC Codes
+Amazon UPC Codes
+Printed Barcode Labels
+Buy Barcodes
+
+Home › Buy UPC Codes
+Buy UPC Codes
+⚡ Limited inventory from our GS1 allocation - No waiting for approval!
+GS1 UPC Barcodes
+Professional UPC codes that work worldwide with no renewal fees. Used by thousands of sellers on Amazon, eBay, iTunes, and retail stores.
+
+Trusted by Leading Brands & 150,000+ Sellers Worldwide Get Your Barcodes Now
+✅ Instant Delivery
+Digital delivery immediately after payment. Start using your codes right away.
+
+✅ Ready to Use
+Complete 12-digit UPC codes with high-resolution barcode files in multiple formats.
+
+✅ Lifetime Ownership
+No renewal fees or hidden charges. One-time purchase, lifetime use.
+Scanbot SDK has been acquired by Apryse!
+
+
+Bulk Lookup
+Barcode API
+
+Global Barcode Search
+Look up product info for any UPC, EAN, or other barcode number
+Search
+More Than
+500-million
+Products at Your Fingertips
+Go-UPC are experts in product data. Our barcode search engine gives you immediate access to data for products, books, and retail items from all over the world, and with our API or bulk-lookup service, you can leverage this massive database to power your own business or application.
+
+Want to look up hundreds of products or barcodes at once? Try our new-and-improved Bulk Lookup Tool.
+
+Search using any UPC, EAN, or ISBN
+Most products in the United States and Canada include a UPC, a 12-digit number that appears just below the barcode. In other parts of the world, it's more common to see items packaged with an EAN — a 13-digit code, which otherwise works just like a UPC. This includes products in Europe, Latin America, Asia, and beyond.
+
+Our barcode search engine supports both UPC and EAN, as well as ISBN, the International Standard Book Number, which you'll find on books almost everywhere in the world.
+
+Amazon, Walmart, Target, eBay — it's all here
+Looking for products from a large retailer like Amazon or Walmart? Got an item from Target, Lowe's, or Kroger that you're trying to find?
+
+Our UPC-lookup service reaches companies and stores large and small. Whether you're dealing with items from a global grocery chain like Walmart, or your local "IGA" supermarket, we've got you covered.
+
+And our data isn't limited to just groceries; we cover all categories and industries. Here are just a handful of the types of products you will find on Go-UPC:
+
+Books, music, and other publications
+Wine, beer, and other beverages
+Clothing, shoes, and apparel of all kinds
+Toys, games, and collectibles
+And many other sectors
+Worldwide reach, international support
+You'll find that most large barcode databases become very limited as you begin to look up products outside of North America — outside the US and Canada specifically. This is not the case with Go-UPC.
+
+Go-UPC aggregates product data from six continents. Whether you're searching by UPC or EAN (GTIN), from Siberia or the Australian Outback, chances are you will find it here. Go-UPC's reach isn't limited to the United States, Europe, and Western countries. Asia, Africa, and South America area all within reach — as well as the nooks and crannies everywhere in between.
+
+Step right up, give us your best shot
+Plug in any UPC, EAN, or ISBN number, and see for yourself what we can find!
+
+Search
+Está pagina también está disponible en español.
+
+Copyright © Tested & Type-Safe, Ltd., 2025
+
+Contact Us About Barcode API Plans Bulk Barcode Lookup Documentation Resources Barcode Search Terms Privacy
+UPC, EAN, and ISBN Lookup Tool – Get Product Info Instantly
+Enter your UPC, EAN, GTIN, or ISBN and get product name, brand, and image
+
+Enter any UPC, EAN, GTIN or ISBN number *
+e.g. 5449000000996
+or
+
+* Please be advised that we utilise the Go-UPC API to retrieve product information for our barcode lookup tool. As such, any content displayed through this tool is not within our direct control and is provided as-is through the API. We assume no responsibility for the accuracy or appropriateness of such content.
+
+QR Code Scanner Tool
+Easily scan any QR codes directly from your browser.
+
+Start Scanning
+Barcode Generator
+Create unique 1D and 2D Barcodes for your needs.
+
+Generate Barcodes
+Demo Apps
+Try the features on iOS, Android, Windows, and the Web.
+
+Explore Demo Apps
+Scan 1D and 2D barcodes in milliseconds
+The Scanbot SDK for mobile and web applications turns any mobile device into a powerful barcode scanner!
+
+Free Lookup Tool
+If you’re looking for a quick and reliable way to search for product information, you’ve come to the right place. Our free Barcode Lookup Tool lets you easily find product details for any item with an EAN, UPC, GTIN, or ISBN code.
+
+Enter the code into our search field, and we will provide you with the corresponding product name, brand, and image. Our comprehensive database has UPC, EAN, ISBN, and GTIN codes for over 500 million products, growing daily, making it easy to get the information you need.
+
+Whether you’re a retailer, distributor, or consumer, our tool is the perfect solution for finding product information. Best of all, it’s completely free to use.
+
+UPC
+UPC stands for Universal Product Code, a 12-digit barcode used to identify products in North America. A UPC can be used to identify products in stores and online. Our UPC Lookup Tool lets you quickly find product information such as name, brand, and image by entering the UPC code.
+
+EAN
+You might need an EAN Lookup Tool if you’re looking for product information for items sold outside North America. EAN, or European Article Number, is a barcode system used in Europe, Asia, and Latin America. Our Barcode Lookup Tool lets you quickly find product details for items with EAN codes. Enter the code into our search field, and our database will provide you with the corresponding product name, brand, and image.
+
+ISBN
+ISBN stands for International Standard Book Number, a unique 13-digit identifier used to identify books and book-like products. Our ISBN Lookup Tool helps you find book information, such as author, title, and edition. It will also show you the book’s cover.
+
+GTIN
+GTIN stands for Global Trade Item Number, a 14-digit identifier used to identify products in the global supply chain. GTIN includes all types of barcodes, such as EAN, UPC, and ISBN. Our Barcode Lookup Tool can help you find product information quickly and easily by entering the GTIN code.
+
+Frequently Asked Questions
+What is a Barcode Lookup Tool?
+Can I use the Barcode Lookup Tool to scan barcodes with my smartphone?
+Can the Barcode Lookup Tool retrieve product pricing information?
+How accurate is the Barcode Lookup Tool?
+Subscribe to our newsletter
+Stay updated on new releases and features, guides, and community updates.
+
+
+© *Scanbot SDK GmbH 2011-2025, located in Germany and the US*
+
+
+
+
+
+✓
+30-Day Money Back Guarantee - All our UPC codes come with a 100% satisfaction guarantee
+"
+Saved me weeks of waiting and hundreds in fees. My products were live on Amazon the same day!
+
+- Sarah M., Amazon Seller
+🔥 Price Alert: UPC costs increasing 20% in 2025. Lock in today's rates!
+2025 UPC Code Pricing
+Quantity	Price	Cost Per Code	Action
+1 UPC Code	$10.00	$10.00 each	Buy Now
+5 UPC Codes	$20.00	$4.00 each	Buy Now
+10 UPC Codes	$30.00	$3.00 each	Buy Now
+25 UPC Codes	$50.00	$2.00 each	Buy Now
+50 UPC Codes	$70.00	$1.40 each	Buy Now
+100 UPC Codes	$90.00	$0.90 each	Buy Now
+250 UPC Codes	$175.00	$0.70 each	Buy Now
+500 UPC Codes	$250.00	$0.50 each	Buy Now
+1,000 UPC Codes	$350.00	$0.35 each	Buy Now
+5,000 UPC Codes	$1,100.00	$0.22 each	Buy Now
+10,000 UPC Codes	$1,800.00	$0.18 each	Buy Now
+30,000 UPC Codes	$3,000.00	$0.10 each	Buy Now
+30,000+ UPC Codes	Custom Pricing	Contact for details	Contact Us
+Ready to Get Started?
+Every order is delivered instantly upon payment and can be used immediately!
+
+Get Your UPC Codes Now
+All UPC Codes Include:
+✅ Valid GS1 Codes that work worldwide
+✅ Compatible with Amazon, eBay, and iTunes
+✅ High-Resolution Barcode Files (PNG, JPG, TIFF & PDF)
+✅ Instant Digital Delivery - use immediately
+✅ No Renewal Fees - one-time purchase only
+How Many UPC Codes Do I Need?
+Every unique product variant needs its own UPC barcode for proper inventory tracking. For example:
+
+If you have 3 T-shirts, each with 3 colors and 3 sizes, you need 3 × 3 × 3 = 27 UPC codes
+Every variation (size, color, style, flavor, etc.) counts as a separate product requiring its own code
+UPC Code Calculator Example
+Frequently Asked Questions
+Are these legitimate GS1 UPC codes?
+Yes, all our UPC codes are valid GS1 codes which work worldwide in retail stores and online marketplaces including Amazon, eBay, and iTunes.
+
+Do the UPC codes expire or have renewal fees?
+No, our UPC codes are yours forever with a one-time payment. There are no renewal fees or additional charges.
+
+How quickly will I receive my UPC codes?
+All orders are delivered instantly upon payment confirmation. You can start using your UPC codes immediately.
+
+Save Up To 90% Compared to GS1 Direct Pricing
+Our 100 UPC package is only $90 ($0.90 per code), compared to $30 per code at GS1.
+
+Get Your UPC Codes Now
+
+
+Buy UPC Codes
+ 
+Amazon UPC Codes
+ Barcode Lookup logo
+ BARCODE
+ LOOKUP
+Add a Barcode
+Mobile App
+API
+Bulk Lookup
+Support
+ Log in
+Enter a barcode number or search term
+ Search
+Barcode Lookup API
+Integrate your app with our UPC, EAN and ISBN database.
+Are you developing a website, desktop or mobile app that needs to pull barcode data and other product information? The Barcode Lookup API makes it easy to integrate our product database with your shopping application, barcode scanning app or inventory management system. Make an API call by sending us a barcode number or search term — that's all there is to it! Our proprietary software returns the product's name, category, description, images, retail pricing and more.
+
+Sign up for the API
+Ask a question
+Schedule a call
+How to make an API call
+The API call URL starts with the following:
+https://api.barcodelookup.com/v3/products?brand=adidas
+products?brand=adidas&category=shoes&key=ifD
+Add any parameters to the URL, separated by ampersands (&)
+Make sure your key is always included at the end of the URL
+hoes&key=ifDzhmKslKav42OD93NEOH
+API call examples
+#Search by Barcode
+*Example background;
+https://api.barcodelookup.com/v3/products?barcode=978014015737&formatted=y&key=ifDzhmKslKav42OD93NE
+Search by Term
+Example background;
+https://api.barcodelookup.com/v3/products?brand=adidas&category=shoes&formatted=y&key=ifDzhmKslKav42OD93NE
+When you search by term, our API lets you use multiple search parameters at once to narrow down your results. For example, in a single API call you can use the 'Brand', 'Category' and 'MPN' search parameters.*
+
+Output ExampleAPI output example
+API Search Parameters
+Parameter	Data Type	Value
+Barcode	String	767719012051
+MPN	String	3M-2963
+ASIN	String	B00814IE4G
+Title	String	Wool Area Rug
+Category	String	Clothing > Activewear
+Manufacturer	String	Toshiba America, Inc.
+Brand	String	Nike
+Search	String	Red Nike Running Shoes
+Metadata	String	y
+Cursor	String	AoEpMTAwMDAwMjYz
+Page	Integer	25
+Geo	String	US, CA, GB, EU
+Formatted	String	y
+Key	String	9d3gf3Gk3lxoi8D9U8Y
+Barcode, MPN, ASIN, Title, Manufacturer or Brand — query our database by using any of these product attributes.
+Category — search by category name (products are categorized using Google's product taxonomy).
+Search — query all term parameters simultaneously including MPN, Product Name, Brand, Manufacturer and Category.
+Page — use for pagination with the MPN, Title, Manufacturer, Brand Category and Search parameters (10 results per page).
+Geo — filter store data by geographical area (United States, Canada, United Kingdom or Europe).
+Formatted — display results in a clean, easy to read format.
+Key (required field) — use your active API key for all requests.
+Fields Returned by API
+Field Name	Data Type	Value
+Barcode	String	859670003107
+Barcode Formats	String	UPC-A 736211911186, EAN-13 0736211911186
+MPN	String	LX-F942607
+Model	String	6500
+ASIN	String	B01EI7RUPI
+Title	String	A New Earth
+Category	String	Camping & Hiking > Tents
+Manufacturer	String	Ford Motor Company
+Brand	String	Michael Kors
+Contributors	String	Malcolm Gladwell
+Age Group	String	PG-13
+Ingredients	String	Tomatoes, Onions, Celery
+Nutrition Facts	String	Calories 75, Protein 6g
+Color	String	Yellow
+Gender	String	Female
+Material	String	Cotton
+Pattern	String	Striped
+Energy Efficiency Rating	String	A+ (A+++ to D)
+Multipack	String	4
+Size	String	Medium
+Length	String	2.6 inches
+Width	String	7.4 inches
+Height	String	3.5 inches
+Weight	String	1.29 lbs
+Release Date	String	1994-05-01
+Description	String	Detailed product description...
+Features	Array	•Sturdy •Real Wood •2 Year Warranty
+Images	Array	https://images.barcodelookup.com/id
+Stores	Array	Store Name, Price, Link, Currency and more
+Reviews	Array	Name, Rating, Title, Review, Date
+Want to dig in deeper and learn how to use our Barcode API?
+Check out our documentation to explore the syntax and parameters, and see various API call examples in action.
+
+Start using the API today!
+Starter
+5,000
+API calls
+$99 / month
+Order PlanSign Up
+Advanced
+25,000
+API calls
+$249 / month
+Order PlanSign Up
+Professional
+100,000
+API calls
+$499 / month
+Order PlanSign Up
+Enterprise
+500,000
+API calls
+$949 / month
+Order PlanSign Up
+ custom API solution.
+
+API
+UPCProduct NameBook TitleValidator
+683405611042,0881314577279,601420925937,...
+Enter UPC or EAN (e.g. 888462323772,888462018869,..., up to 5 UPCs separated by comma)
+UPC Lookup Database
+With over 667 million unique UPC/EAN numbers, UPCitemdb.com is the largest UPC lookup database where you can search a broad range of UPC numbers to find related product information, images, barcodes, online shopping guide and more.
+
+Latest 75 UPC updates out of 667,255,235 unique UPC numbers!
+
+EAN-13 Barcode of UPC 191894861973
+191894861973
+1 gal. PPG1190-4 Soft Salmon Eggshell Interior Paint
+
+EAN-13 Barcode of UPC 191894778219
+191894778219
+1 gal. PPG1178-2 Wine Frost Eggshell Interior Paint
+
+EAN-13 Barcode of UPC 191894978565
+191894978565
+1 gal. PPG1096-2 Morocco Sand Ultra Flat Interior Paint
+
+EAN-13 Barcode of UPC 191894971337
+191894971337
+1 gal. PPG0999-1 In The Cloud Ultra Flat Interior Paint
+
+EAN-13 Barcode of UPC 191894862895
+191894862895
+1 gal. PPG1224-6 Celery Sprig Eggshell Interior Paint
+
+EAN-13 Barcode of UPC 638508189264
+638508189264
+White Poodle Easter Egg Hunt Flag Garden Size BB1939GF
+
+EAN-13 Barcode of UPC 638508192875
+638508192875
+Saint Bernard St. Patrick's Day Flag Canvas House Size BB1990CHF
+
+
+EAN-13 Barcode of UPC 638508189424
+638508189424
+German Shepherd St. Patrick's Day Flag Garden Size BB1955GF
+
+EAN-13 Barcode of UPC 751379598932
+751379598932
+Pillow Perfect Outdoor/ Indoor Rave Graphite 25-inch Floor Pillow
+
+EAN-13 Barcode of UPC 198162093821
+198162093821
+Montauk 8 ft. x 10 ft. Ivory/Beige Geometric Lattice Area Rug
+
+EAN-13 Barcode of UPC 195058805377
+195058805377
+SAFAVIEH Diamond Teodor Distressed Polyester Runner Rug Beige/Grey 2 2 x 8
+
+EAN-13 Barcode of UPC 195058775564
+195058775564
+Safavieh BLM463Y Blossom Green / Ivory
+
+EAN-13 Barcode of UPC 198162012242
+198162012242
+SAFAVIEH Ebony Iacopo Distressed Runner Rug Ivory/Gray 2 3 x 9
+
+EAN-13 Barcode of UPC 198162285554
+198162285554
+Martha Stewart Denali 9 ft. x 12 ft. Navy/Ivory Zig-Zag Striped Area Rug
+
+EAN-13 Barcode of UPC 198162138270
+198162138270
+Braided Rust/Red 3 ft. x 4 ft. Machine Washable Geometric Solid Area Rug
+
+1-15 | 16-30 | 31-45 | 46-60 | 61-75
+
+Privacy Terms API Fees & Billing
+UPCitemdb.com Contact
+  
+Disclaimer: The information is all provided as-is, with no guarantees on availability or accuracy of the results. We'll certainly do our best to make the service highly-available though, and the results accurate.
+
+Copyright @ 2025 upcitemdb.com. All rights reserved.
+
+
+Not ready to sign-up? Try our free test API account.
+
+Flexible, month-to-month API plans
+Pay month to month — no contracts or long-term commitments.
+
+Upgrade or downgrade your API plan anytime as your needs evolve.
+
+Sign up and instantly receive your unique API key to make calls.
+
+Search Results
+Barcode Lookup | UPC, EAN & ISBN Search
+Use Barcode Lookup to search any UPC, EAN and ISBN code to find product information including images, pricing, reviews and places to purchase online.
+
+barcodelookup.com
+Barcode Lookup API | Search our UPC, EAN and ISBN Database
+Integrate our Barcode API with your own application. Search or scan any UPC, EAN or ISBN barcode to instantly lookup product information from our database.
+
+barcodelookup.com
+Barcode Lookup Mobile App for Android and iOS Devices
+Barcode Lookup offers a free mobile app at the App Store and Google Play. Scan and retrieve barcode info including product descriptions, images and reviews.
+
+barcodelookup.com
+r/webdev on Reddit: Free barcode lookup api ?
+Hello there, Working on a small web app that has a barcode scanning feature, i'm wandering what do you guys use for a simple app that scans barcodes…
+
+reddit.com
+Barcode Lookup | Facebook
+Barcode Lookup. 195 likes · 2 talking about this. Find millions of products online by searching barcode numbers.
+
+facebook.com
+Barcode Lookup - Apps on Google Play
+A barcode scanner that looks up product info for over a billion items worldwide.
+
+play.google.com
+Barcode Lookup - Apps on Google Play
+A barcode scanner that looks up product info for over a billion items worldwide.
+
+play.google.com
+Add a Barcode | Be a Contributor to Barcode Lookup
+Add a barcode and product information to Barcode Lookup. Thank you for contributing to our growing database.
+
+barcodelookup.com
+Barcode Lookup — Odoo 18.0 documentation
+Barcode Lookup allows you to scan (or enter) products’ barcodes (UPC, EAN, or ISBN) to automatically create them in your Odoo database, complete with product names, descriptions, images, categories, etc · If your database is hosted on Odoo Online, you can use Barcode Lookup without configuration
+
+odoo.com
+‎Barcode Lookup on the App Store
+Barcode Lookup is more than just a barcode scanner. This app lets you instantly search over a billion products to find useful information including pricing, ima…
+
+apps.apple.com
+Barcode Lookup - Apps on Google Play
+A barcode scanner that looks up product info for over a billion items worldwide.
+
+play.google.com
+r/webdev on Reddit: good barcode api?
+Hey team, Any consensus on a good, free (or cheap) UPC lookup api to integrate into a web app? Thanks
+
+reddit.com
+UPC Barcode Search — Look up any UPC, EAN, or ISBN
+Our barcode search engine gives you immediate access to data for products, books, and retail items from all over the globe. With more than 500-million products, you can look up product information for any UPC, EAN, or other barcode number instantly.
+
+go-upc.com
+Integration UPC Item DB and Barcode Lookup | AltheaSuite
+Read our support guide here about Integration UPC Item DB and Barcode Lookup.
+
+altheasuite.com
+Barcode Lookup - Apps on Google Play
+A barcode scanner that looks up product info for over a billion items worldwide.
+
+play.google.com
+Barcode Lookup - Apps on Google Play
+A barcode scanner that looks up product info for over a billion items worldwide.
+
+play.google.com
+UPC Lookup - Scandit
+Scandit's UPC lookup tool searches Brocade's product database for any given UPC code. Scandit's solutions help bring barcode scanning technology to any industry.
+
+scandit.com
+API Documentation | Barcode Lookup
+Barcode Lookup's comprehensive API documentation for its API service.
+
+barcodelookup.com
+Bulk Lookup | Get Barcode Data & Product Information Quickly!
+Barcode Lookup offers a Bulk Lookup service for anyone who needs large data retrieved for 100s or 1,000s of products in an efficient and timely manner.
+
+barcodelookup.com
+Postman
+postman.com
+Barcode Autofill Lookup for Retail Items?
+Once you scan barcode, this script will send a HTTP request to barcodelookup.com API and use that information to automatically fill out: ... (you can modify the script to fill out other fields too - try accessing the API url directly to see all fields available.) To setup autofill script in your Memento Database App go to the library you want this script in and go to: Menu -> Edit library -> Autofill -> Click the plus -> By barcode -> Custom source · Then open script editor and paste this script there: function getAPIdata(id) { var results = []; var entry = new Object(); const api_key = "YOUR_API_KEY"; const url = "https://api.barcodelookup.com/v2/products?barcode="+id+"&formatted=y&key=" + api_key; var result = http().get(url); if(result.code == "200") { var products = JSON.parse(result.body); var product = products.products[0]; entry["title"] = product.product_name; ...
+
+groups.google.com
+Barcode Lookup - Apps on Google Play
+A barcode scanner that looks up product info for over a billion items worldwide.
+
+play.google.com
+Challenge Validation
+similarweb.com
+Barcode Lookup | How to lookup a product information by its barcode number
+Just typing in the item's barcode number, they will bring you clear, useful info on any product you're interested in · https://www.barcodelookup.com
+
+free-barcode.com
+barcodelookup.com Competitors - Top Sites Like barcodelookup.com | Similarweb
+barcodelookup.com top 10 competitors & alternatives. Analyze sites like barcodelookup.com ranked by keyword and audience similarity for free with one click here
+
+similarweb.com
