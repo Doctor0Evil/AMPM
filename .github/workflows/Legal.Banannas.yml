@@ -1,0 +1,50 @@
+name: Perplexity.Labs - Always-Active Legal.Banannas Documentation Deployment
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate Legal.Banannas documentation (.md/.html)
+        run: |
+          # Custom script to validate legal markdown or documents
+          ./scripts/validate_legal_docs.sh
+
+      - name: Package Embeddable Web Elements
+        run: |
+          # Custom build step for embeddable elements
+          ./scripts/build_embeddables.sh
+
+      - name: Deploy to Web (Continuous)
+        uses: easingthemes/ssh-deploy@v5
+        with:
+          ssh-private-key: ${{ secrets.SSH_KEY }}
+          remote-user: ${{ secrets.REMOTE_USER }}
+          server-ip: ${{ secrets.SERVER_IP }}
+          remote-path: /var/www/perplexitylabs/legalbanannas
+
+      - name: Maintain Always-Active State
+        run: |
+          # Health check, monitoring, or keepalive service can be run here
+          ./scripts/persist_active_state.sh
+
+      - name: Notify Stakeholders and Audit Systems
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: "Legal.Banannas Documentation Deployed"
+          body: |
+            New legal document versions have been deployed and are actively monitored.
+            Audit log: ${{ github.run_id }}
+          to: xboxteejaymcfarmer@gmail.com
